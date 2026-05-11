@@ -69,7 +69,20 @@
           <el-icon><Timer /></el-icon>
           <template #title>自动重置</template>
         </el-menu-item>
-        
+
+        <el-menu-item index="auto-switch" @click="uiStore.openSettingsDialog('auto-switch')">
+          <el-icon><Switch /></el-icon>
+          <template #title>
+            自动切换
+            <el-badge
+              v-if="settingsStore.settings?.autoSwitchEnabled"
+              value="ON"
+              type="success"
+              class="auto-switch-badge"
+            />
+          </template>
+        </el-menu-item>
+
         <el-menu-item index="card-generator" @click="showCardGeneratorDialog = true">
           <el-icon><CreditCard /></el-icon>
           <template #title>虚拟卡生成</template>
@@ -2401,6 +2414,18 @@ onUnmounted(() => {
 .sidebar-menu {
   -ms-overflow-style: none;  /* IE and Edge */
   scrollbar-width: none;  /* Firefox */
+}
+
+/* "自动切换"菜单项右侧的 ON 状态徽标 */
+.auto-switch-badge {
+  margin-left: 8px;
+  transform: translateY(-2px);
+}
+.auto-switch-badge :deep(.el-badge__content) {
+  font-size: 10px;
+  padding: 0 5px;
+  height: 16px;
+  line-height: 16px;
 }
 
 .sidebar-footer {

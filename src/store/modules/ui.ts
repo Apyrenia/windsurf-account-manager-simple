@@ -27,6 +27,9 @@ export const useUIStore = defineStore('ui', () => {
   const showAddAccountDialog = ref(false);
   const showEditAccountDialog = ref(false);
   const showSettingsDialog = ref(false);
+  // 打开设置对话框时希望激活的 tab 名（用于侧边栏"自动切换"等快捷入口直接定位）
+  // 注意：每次 openSettingsDialog(tab) 都会重写此值；SettingsDialog 内部通过 watch 同步 activeTab。
+  const settingsInitialTab = ref<string | null>(null);
   const showLogsDialog = ref(false);
   const showBatchOperationDialog = ref(false);
   const showStatsDialog = ref(false);
@@ -100,7 +103,15 @@ export const useUIStore = defineStore('ui', () => {
     currentEditingAccountId.value = null;
   }
 
-  function openSettingsDialog() {
+  /**
+   * 打开设置对话框
+   * @param initialTab 可选，希望直接激活的 tab name（如 `'auto-switch'`、`'seamless'`），
+   *                   SettingsDialog 内部 watch 此值并切换 `activeTab`
+   */
+  function openSettingsDialog(initialTab?: string) {
+    if (initialTab) {
+      settingsInitialTab.value = initialTab;
+    }
     showSettingsDialog.value = true;
   }
 
@@ -159,6 +170,7 @@ export const useUIStore = defineStore('ui', () => {
     showAddAccountDialog,
     showEditAccountDialog,
     showSettingsDialog,
+    settingsInitialTab,
     showLogsDialog,
     showBatchOperationDialog,
     showStatsDialog,

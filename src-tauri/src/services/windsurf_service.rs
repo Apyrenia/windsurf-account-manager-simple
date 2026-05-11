@@ -23,6 +23,34 @@ pub struct AttemptResult {
     pub timestamp: String,
 }
 
+/// 标准化的账号配额信息，兼容新旧两套计费体系（QUOTA / CREDIT）
+///
+/// 由 `WindsurfService::query_quota_summary` 返回，是所有上层调用方
+/// （`auto_switch`、`auto_reset`、未来的额度监控等）的**唯一**配额数据入口。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotaSummary {
+    /// 已使用百分比，0-100
+    pub usage_percent: i32,
+    /// 剩余百分比，0-100；QUOTA 模式下取日/周中较小者
+    pub remaining_percent: i32,
+    /// 已使用估算值（CREDIT 单位，10000 满分制）
+    /// - 旧版 CREDIT 模式：返回真实积分数
+    /// - 新版 QUOTA 模式：用 `usage_percent * 100` 模拟，保持旧代码的 *100 scaling 兼容
+    pub used_estimate: i64,
+    /// 总额度估算值（CREDIT 单位）
+    /// - 旧版 CREDIT 模式：返回真实总积分
+    /// - 新版 QUOTA 模式：固定 10000
+    pub total_estimate: i64,
+    /// 日配额剩余百分比（仅 QUOTA 模式有值）
+    pub daily_remaining_percent: Option<i32>,
+    /// 周配额剩余百分比（仅 QUOTA 模式有值）
+    pub weekly_remaining_percent: Option<i32>,
+    /// 计费模式标识：`"quota"` | `"credit"`，调试用
+    pub billing_mode: String,
+    /// 原始 plan_status JSON（保留给需要其他字段的调用方）
+    pub raw_plan_status: serde_json::Value,
+}
+
 
 pub struct WindsurfService {
     client: Arc<reqwest::Client>,
@@ -1094,6 +1122,98 @@ impl WindsurfService {
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             }))
         }
+    }
+
+    /// 统一查询账号配额，返回兼容新旧两套计费体系的标准化结果
+    ///
+    /// ## 设计目的
+    ///
+    /// Windsurf 经历过计费体系切换：
+    /// - **旧版 CREDIT**（已废弃，新账号字段恒为 0）：`used_*_credits` / `available_*_credits`
+    /// - **新版 QUOTA**（当前生效）：`daily_quota_remaining_percent` / `weekly_quota_remaining_percent`
+    ///
+    /// 历史上 `auto_switch` / `auto_reset` 各自手写解析逻辑，且都基于已废弃的 CREDIT 字段，
+    /// 导致在新版账号上判断完全失效。本方法**统一**入口，所有上层只用 `QuotaSummary` 即可，
+    /// 不再关心计费类型。
+    ///
+    /// ## 返回字段含义
+    ///
+    /// - `usage_percent` / `remaining_percent`：0-100 百分比，**新代码用这两个**
+    /// - `used_estimate` / `total_estimate`：CREDIT 单位的估算值（10000 满分制），
+    ///   旧版有真实值时返回真值；新版下用 `(usage_percent * 100, 10000)` 模拟，
+    ///   **保证现有依赖 used/total + scaling 的旧代码（如 `auto_reset` 的 `remaining_threshold * 100`）
+    ///   能继续工作**，无需 migration 用户配置
+    /// - `billing_mode`：`"quota"` 或 `"credit"`，便于日志/调试
+    ///
+    /// ## QUOTA 模式聚合规则
+    ///
+    /// 同时有日/周配额时，取**剩余更少**者作为决策依据（即"最先耗尽"的口径，最保守）。
+    pub async fn query_quota_summary(&self, ctx: &AuthContext) -> AppResult<QuotaSummary> {
+        let plan_status = self.get_plan_status(ctx).await?;
+        let ps = plan_status.get("plan_status").unwrap_or(&plan_status);
+
+        // === 新版 QUOTA 模式优先 ===
+        let daily_remaining = ps.get("daily_quota_remaining_percent").and_then(|v| v.as_i64());
+        let weekly_remaining = ps
+            .get("weekly_quota_remaining_percent")
+            .and_then(|v| v.as_i64());
+
+        if daily_remaining.is_some() || weekly_remaining.is_some() {
+            let min_remaining = match (daily_remaining, weekly_remaining) {
+                (Some(d), Some(w)) => d.min(w),
+                (Some(d), None) => d,
+                (None, Some(w)) => w,
+                _ => 100,
+            }
+            .clamp(0, 100) as i32;
+            let usage_percent = (100 - min_remaining).clamp(0, 100);
+            // 估算字段：100% → 10000，0% → 0；保持 *100 scaling 兼容
+            let used_estimate = (usage_percent * 100) as i64;
+            let total_estimate = 10000_i64;
+            return Ok(QuotaSummary {
+                usage_percent,
+                remaining_percent: min_remaining,
+                used_estimate,
+                total_estimate,
+                daily_remaining_percent: daily_remaining.map(|v| v as i32),
+                weekly_remaining_percent: weekly_remaining.map(|v| v as i32),
+                billing_mode: "quota".to_string(),
+                raw_plan_status: plan_status.clone(),
+            });
+        }
+
+        // === 降级：旧版 CREDIT 模式 ===
+        let used_prompt = ps.get("used_prompt_credits").and_then(|v| v.as_i64()).unwrap_or(0);
+        let used_flex = ps.get("used_flex_credits").and_then(|v| v.as_i64()).unwrap_or(0);
+        let available_flex = ps
+            .get("available_flex_credits")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let available_prompt = ps
+            .get("available_prompt_credits")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let used = used_prompt + used_flex;
+        let total = available_flex + available_prompt;
+
+        let (usage_percent, remaining_percent) = if total > 0 {
+            let usage = ((used as f64 / total as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
+            (usage, (100 - usage).clamp(0, 100))
+        } else {
+            (0, 100)
+        };
+
+        Ok(QuotaSummary {
+            usage_percent,
+            remaining_percent,
+            used_estimate: used,
+            total_estimate: total,
+            daily_remaining_percent: None,
+            weekly_remaining_percent: None,
+            billing_mode: "credit".to_string(),
+            raw_plan_status: plan_status,
+        })
     }
 
     pub async fn reset_credits(&self, ctx: &AuthContext, seat_count: Option<i32>, last_seat_count: Option<i32>, seat_count_options: &[i32]) -> AppResult<serde_json::Value> {

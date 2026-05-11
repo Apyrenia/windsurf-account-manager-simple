@@ -492,39 +492,32 @@ pub async fn check_and_auto_reset(
             });
             
             // 使用成员的 token 调用 GetPlanStatus API 获取实时配额
-            // 注意：账户面板的取值逻辑是：
-            //   - used_quota = used_prompt_credits + used_flex_credits
-            //   - total_quota = available_flex_credits + available_prompt_credits（这是总配额！）
-            //   - remaining = total_quota - used_quota
+            //
+            // ⚠️ 关键设计：通过 `windsurf_service.query_quota_summary` 公用方法获取数据，
+            // 该方法**优先**读新版 QUOTA 字段（`daily/weekly_quota_remaining_percent`），
+            // 不存在时降级到旧版 CREDIT 字段（`used_*_credits`/`available_*_credits`）。
+            //
+            // QuotaSummary.used_estimate / total_estimate 在 QUOTA 模式下是
+            // `(usage_percent * 100, 10000)` 的模拟值，**保持** `remaining_threshold * 100`
+            // scaling 兼容，用户现有重置规则配置无需迁移即可在新版账号上正确触发。
             let (used_quota, total_member_quota) = if let Some(acc) = member_account {
                 // 为成员构造 AuthContext；Devin 成员会自动携带 5 个完整 header
                 if let Ok(member_ctx) = AuthContext::from_account(acc) {
                     if !member_ctx.token.is_empty() {
-                        // 调用 GetPlanStatus API 获取实时数据
-                        match windsurf_service.get_plan_status(&member_ctx).await {
-                            Ok(plan_status) => {
-                                let ps = plan_status.get("plan_status").unwrap_or(&plan_status);
-                                
-                                // 提取已使用积分（used_prompt_credits + used_flex_credits）
-                                let used_prompt = ps.get("used_prompt_credits")
-                                    .and_then(|v| v.as_i64())
-                                    .unwrap_or(0);
-                                let used_flex = ps.get("used_flex_credits")
-                                    .and_then(|v| v.as_i64())
-                                    .unwrap_or(0);
-                                let used = (used_prompt + used_flex) as i32;
-                                
-                                // 提取总配额（available_flex + available_prompt 是总配额）
-                                let available_flex = ps.get("available_flex_credits")
-                                    .and_then(|v| v.as_i64())
-                                    .unwrap_or(0);
-                                let available_prompt = ps.get("available_prompt_credits")
-                                    .and_then(|v| v.as_i64())
-                                    .unwrap_or(0);
-                                let total = (available_flex + available_prompt) as i32;
-                                
-                                println!("[AutoReset] 从 GetPlanStatus API 获取 {} 的配额: used={} (prompt={}, flex={}), total={} (flex={}, prompt={})", 
-                                    member_email, used, used_prompt, used_flex, total, available_flex, available_prompt);
+                        // 调用统一配额查询（公用函数 - 兼容新旧两套计费体系）
+                        match windsurf_service.query_quota_summary(&member_ctx).await {
+                            Ok(summary) => {
+                                let used = summary.used_estimate as i32;
+                                let total = summary.total_estimate as i32;
+                                println!(
+                                    "[AutoReset] 从 GetPlanStatus API 获取 {} 的配额: mode={}, usage={}%, remaining={}%, used_est={}, total_est={}",
+                                    member_email,
+                                    summary.billing_mode,
+                                    summary.usage_percent,
+                                    summary.remaining_percent,
+                                    used,
+                                    total
+                                );
                                 (used, total)
                             }
                             Err(e) => {

@@ -1170,6 +1170,12 @@ watch(() => uiStore.showSettingsDialog, async (show) => {
     // 加载成功BIN池数量和测试模式进度
     await loadSuccessBinCount();
     await loadTestModeProgress();
+    // 快捷入口：如果通过 openSettingsDialog(initialTab) 指定了 tab，切换到对应面板
+    // 使用后立即清空，避免下次打开仍跳到该 tab
+    if (uiStore.settingsInitialTab) {
+      activeTab.value = uiStore.settingsInitialTab;
+      uiStore.settingsInitialTab = null;
+    }
   }
 }, { immediate: true });
 

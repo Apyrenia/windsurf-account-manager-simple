@@ -332,78 +332,17 @@ pub async fn check_and_auto_switch(
 
 /// 查询账号配额，返回 `(usage_percent, remaining_percent)`，单位均为 0-100 百分比
 ///
-/// ## 兼容两套计费体系
-///
-/// Windsurf 历史上有两套计费：
-/// - **新版 QUOTA（当前生效）**：按日/周配额百分比计算（`daily_quota_remaining_percent` /
-///   `weekly_quota_remaining_percent`），值域 0-100
-/// - **旧版 CREDIT（已废弃）**：按积分使用率计算（`used_*_credits` /
-///   `available_*_credits`），单位为整数积分
-///
-/// 本函数**优先**读取新版 QUOTA 字段；如果两个 quota 字段都为空（旧账号或服务端降级），
-/// 才 fallback 到 CREDIT 字段并换算成百分比。结果统一为 0-100 百分比，调用方无需关心计费类型。
-///
-/// ## QUOTA 模式聚合规则
-///
-/// 当账号同时有日配额和周配额时，取**剩余更少**的那个作为决策依据
-/// （即"最先耗尽"的口径，最保守，避免日配额已满但周配额还多导致漏切）。
+/// 薄包装：调用 `WindsurfService::query_quota_summary` 公用方法，兼容两套计费体系。
+/// 详细字段说明见 `QuotaSummary`。
 async fn query_account_quota(
     service: &WindsurfService,
     ctx: &AuthContext,
 ) -> Result<(i32, i32), String> {
-    let plan_status = service.get_plan_status(ctx).await.map_err(|e| e.to_string())?;
-    let ps = plan_status
-        .get("plan_status")
-        .unwrap_or(&plan_status);
-
-    // === 新版 QUOTA 模式优先 ===
-    let daily_remaining = ps.get("daily_quota_remaining_percent").and_then(|v| v.as_i64());
-    let weekly_remaining = ps
-        .get("weekly_quota_remaining_percent")
-        .and_then(|v| v.as_i64());
-
-    if daily_remaining.is_some() || weekly_remaining.is_some() {
-        // 取日/周中"剩余更少"作为决策依据（即"最先耗尽"的那条）
-        let min_remaining = match (daily_remaining, weekly_remaining) {
-            (Some(d), Some(w)) => d.min(w),
-            (Some(d), None) => d,
-            (None, Some(w)) => w,
-            _ => 100,
-        }
-        .clamp(0, 100) as i32;
-        let usage_percent = (100 - min_remaining).clamp(0, 100);
-        return Ok((usage_percent, min_remaining));
-    }
-
-    // === 降级：旧版 CREDIT 模式 ===
-    let used_prompt = ps
-        .get("used_prompt_credits")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    let used_flex = ps
-        .get("used_flex_credits")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    let available_flex = ps
-        .get("available_flex_credits")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    let available_prompt = ps
-        .get("available_prompt_credits")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-
-    let used = used_prompt + used_flex;
-    let total = available_flex + available_prompt;
-
-    if total > 0 {
-        let usage_percent = ((used as f64 / total as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
-        let remaining_percent = (100 - usage_percent).clamp(0, 100);
-        Ok((usage_percent, remaining_percent))
-    } else {
-        // 没数据：当作 0% 使用、100% 剩余（不会触发切换，保守安全）
-        Ok((0, 100))
-    }
+    let summary = service
+        .query_quota_summary(ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok((summary.usage_percent, summary.remaining_percent))
 }
 
 /// 计算账号的剩余配额百分比（0-100），用于 `pick_next_account` 的过滤和排序
