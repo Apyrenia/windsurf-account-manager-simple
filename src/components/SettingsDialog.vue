@@ -565,7 +565,136 @@
           </el-alert>
         </el-form>
       </el-tab-pane>
-      
+
+      <!-- 额度耗尽自动切换标签页（Fork 新增） -->
+      <el-tab-pane label="自动切换" name="auto-switch" lazy>
+        <el-form :model="settings" label-width="160px">
+          <el-form-item label="启用自动切换">
+            <el-switch
+              v-model="settings.autoSwitchEnabled"
+              active-text="开启"
+              inactive-text="关闭"
+            />
+            <div style="margin-top: 5px; color: #909399; font-size: 12px;">
+              开启后，应用会周期性检查当前活跃 Windsurf 账号的额度，达到阈值时自动切换到下一个账号
+            </div>
+          </el-form-item>
+
+          <el-alert
+            v-if="settings.autoSwitchEnabled && !settings.seamlessSwitchEnabled"
+            type="warning"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 16px;"
+          >
+            <template #title>
+              建议先启用「无感换号」补丁
+            </template>
+            <template #default>
+              <div style="font-size: 12px; line-height: 1.6;">
+                未启用无感换号时，自动切换会触发 Windsurf 重启；启用补丁后即可在 IDE 内无感换号。
+              </div>
+            </template>
+          </el-alert>
+
+          <el-form-item label="检查间隔" v-if="settings.autoSwitchEnabled">
+            <el-input-number
+              v-model="settings.autoSwitchCheckInterval"
+              :min="1"
+              :max="1440"
+              :step="1"
+            />
+            <span style="margin-left: 10px; color: #909399;">分钟</span>
+            <div style="margin-top: 5px; color: #909399; font-size: 12px;">
+              每隔多少分钟检查一次当前账号配额（建议 5 分钟，过短会增加 API 请求频率）
+            </div>
+          </el-form-item>
+
+          <el-form-item label="使用率阈值" v-if="settings.autoSwitchEnabled">
+            <el-input-number
+              v-model="settings.autoSwitchThresholdPercent"
+              :min="50"
+              :max="100"
+              :step="1"
+            />
+            <span style="margin-left: 10px; color: #909399;">%</span>
+            <div style="margin-top: 5px; color: #909399; font-size: 12px;">
+              当前账号使用率 ≥ 此值时触发切换（默认 95%，过低可能频繁切号）
+            </div>
+          </el-form-item>
+
+          <el-form-item label="剩余积分阈值" v-if="settings.autoSwitchEnabled">
+            <el-input-number
+              v-model="settings.autoSwitchRemainingThreshold"
+              :min="0"
+              :max="100000"
+              :step="100"
+            />
+            <span style="margin-left: 10px; color: #909399;">积分（0=禁用此条件）</span>
+            <div style="margin-top: 5px; color: #909399; font-size: 12px;">
+              额外限制：剩余积分 ≤ 此值时才触发切换（与使用率阈值同时满足才切）。设为 0 表示只看使用率
+            </div>
+          </el-form-item>
+
+          <el-form-item label="选号策略" v-if="settings.autoSwitchEnabled">
+            <el-radio-group v-model="settings.autoSwitchStrategy">
+              <el-radio value="most_remaining">剩余配额最多</el-radio>
+              <el-radio value="round_robin">轮换（最久未用）</el-radio>
+            </el-radio-group>
+            <div style="margin-top: 5px; color: #909399; font-size: 12px;">
+              「剩余配额最多」优先选最富的账号；「轮换」按上次登录时间升序，最久没用的优先
+            </div>
+          </el-form-item>
+
+          <el-form-item label="同体系优先" v-if="settings.autoSwitchEnabled">
+            <el-switch
+              v-model="settings.autoSwitchPreferSameProvider"
+              active-text="开启"
+              inactive-text="关闭"
+            />
+            <div style="margin-top: 5px; color: #909399; font-size: 12px;">
+              开启后优先选择与当前账号同认证体系（Firebase/Devin）的账号，无候选时自动降级到全部账号
+            </div>
+          </el-form-item>
+
+          <el-divider content-position="left">手动测试</el-divider>
+
+          <el-form-item label="立即检查">
+            <el-button
+              type="primary"
+              :loading="autoSwitchTesting"
+              :disabled="!settings.autoSwitchEnabled"
+              @click="handleAutoSwitchTest"
+            >
+              立即检查并切换
+            </el-button>
+            <div style="margin-top: 5px; color: #909399; font-size: 12px;">
+              手动触发一次检查，用于验证当前配置是否生效
+            </div>
+          </el-form-item>
+
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-top: 16px;"
+          >
+            <template #title>
+              <span style="font-weight: bold;">工作原理</span>
+            </template>
+            <template #default>
+              <div style="font-size: 12px; line-height: 1.8;">
+                <p>1. 定时器读取当前 Windsurf 中活跃的账号</p>
+                <p>2. 调用 GetPlanStatus API 实时查询配额（不读本地缓存）</p>
+                <p>3. 同时满足「使用率 ≥ 阈值」和「剩余 ≤ 阈值」时触发切换</p>
+                <p>4. 按选号策略从账号库挑出下一个可用账号，复用切号流程</p>
+                <p>5. 切换成功/失败都会写入操作日志，可在「日志」中查看</p>
+              </div>
+            </template>
+          </el-alert>
+        </el-form>
+      </el-tab-pane>
+
       <!-- 备份设置标签页 -->
       <el-tab-pane label="备份设置" name="backup" lazy>
         <el-form :model="settings" label-width="140px">
@@ -673,7 +802,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Connection, Check, Close } from '@element-plus/icons-vue';
 import { useSettingsStore, useUIStore } from '@/store';
 import { invoke } from '@tauri-apps/api/core';
-import { systemApi } from '@/api';
+import { systemApi, apiService } from '@/api';
 import ThemeSelector from '@/components/ThemeSelector.vue';
 
 const settingsStore = useSettingsStore();
@@ -683,6 +812,7 @@ const loading = ref(false);
 const activeTab = ref('basic');  // 当前激活的标签页
 const seatCountOptionsInput = ref('18, 19, 20');  // 座位数选项输入框
 const resettingHttp = ref(false);  // HTTP客户端重置中
+const autoSwitchTesting = ref(false);  // 自动切换手动测试中（Fork 新增）
 
 // 解析座位数选项
 function parseSeatCountOptions() {
@@ -744,6 +874,13 @@ const settings = reactive<{
   autoBackupEnabled: boolean;
   backupInterval: number;
   backupMaxCount: number;
+  // 额度耗尽自动切换（Fork 新增）
+  autoSwitchEnabled: boolean;
+  autoSwitchCheckInterval: number;
+  autoSwitchThresholdPercent: number;
+  autoSwitchRemainingThreshold: number;
+  autoSwitchStrategy: 'most_remaining' | 'round_robin';
+  autoSwitchPreferSameProvider: boolean;
 }>({
   auto_refresh_token: true,
   seat_count_options: [18, 19, 20],
@@ -781,6 +918,13 @@ const settings = reactive<{
   autoBackupEnabled: true,  // 默认启用自动备份
   backupInterval: 10,  // 默认10分钟
   backupMaxCount: 10,  // 默认最多10份
+  // 额度耗尽自动切换默认值
+  autoSwitchEnabled: false,
+  autoSwitchCheckInterval: 5,
+  autoSwitchThresholdPercent: 95,
+  autoSwitchRemainingThreshold: 0,
+  autoSwitchStrategy: 'most_remaining',
+  autoSwitchPreferSameProvider: true,
 });
 
 // 备份相关
@@ -1335,6 +1479,39 @@ async function handleResetHttpClient() {
     ElMessage.error(`重置失败: ${error}`);
   } finally {
     resettingHttp.value = false;
+  }
+}
+
+// 手动触发一次自动切换检查（Fork 新增，用于"立即检查并切换"按钮）
+async function handleAutoSwitchTest() {
+  // 用户可能改了设置但还没保存，先把当前 reactive 状态写入 store
+  // 避免后端读到的还是旧设置
+  if (settings.windsurfPath !== windsurfPath.value && windsurfPath.value) {
+    settings.windsurfPath = windsurfPath.value;
+  }
+  await settingsStore.updateSettings(settings);
+
+  autoSwitchTesting.value = true;
+  try {
+    const result = await apiService.checkAndAutoSwitch();
+    if (result.triggered) {
+      ElMessage.success(
+        `已自动切换：${result.current_email} → ${result.switched_to_email}` +
+          (result.switched_to_remaining != null
+            ? `（新账号剩余 ${result.switched_to_remaining}）`
+            : '')
+      );
+    } else if (result.current_email) {
+      ElMessage.info(
+        `当前账号 ${result.current_email}：使用率 ${result.current_usage_percent ?? '?'}%，剩余 ${result.current_remaining ?? '?'}。${result.reason ?? ''}`
+      );
+    } else {
+      ElMessage.warning(result.reason || '未触发切换');
+    }
+  } catch (error) {
+    ElMessage.error(`检查失败: ${error}`);
+  } finally {
+    autoSwitchTesting.value = false;
   }
 }
 

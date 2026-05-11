@@ -409,6 +409,27 @@ export const apiService = {
   }> {
     return await invoke('reset_machine_id');
   },
+
+  /**
+   * 检查并执行额度耗尽自动切换（Fork 新增）
+   *
+   * 后端会按 Settings 中的 `autoSwitchEnabled / autoSwitchThresholdPercent /
+   * autoSwitchRemainingThreshold` 三个开关决定是否触发切换。前端定时器只需周期性调用，
+   * 不需要在前端做任何阈值判断。
+   *
+   * 后端 emit 事件 `auto-switch-result`，前端可通过 `listen` 订阅以显示 toast。
+   */
+  async checkAndAutoSwitch(): Promise<{
+    triggered: boolean;
+    current_email?: string;
+    current_usage_percent?: number;
+    current_remaining?: number;
+    switched_to_email?: string;
+    switched_to_remaining?: number;
+    reason?: string;
+  }> {
+    return await invoke('check_and_auto_switch');
+  },
 };
 
 // 设置管理API

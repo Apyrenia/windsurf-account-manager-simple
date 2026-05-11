@@ -305,6 +305,21 @@ pub async fn switch_account(
     id: String,
     data_store: State<'_, Arc<DataStore>>,
 ) -> Result<Value, String> {
+    perform_account_switch(app, data_store.inner(), id).await
+}
+
+/// 切号核心逻辑（Fork 新增抽取）
+///
+/// 与 `switch_account` Tauri 命令共享同一份实现：
+/// - 自动切换（`check_and_auto_switch`）需要在不暴露 `State` 的情况下复用切号流程；
+/// - 直接抽到独立函数，避免 200+ 行核心逻辑被复制粘贴。
+///
+/// 注意：本函数仍会向前端 emit `switch-progress` 事件，前端 toast/弹窗可以选择监听。
+pub(crate) async fn perform_account_switch(
+    app: AppHandle,
+    data_store: &Arc<DataStore>,
+    id: String,
+) -> Result<Value, String> {
     info!("Switching account: {}", id);
     emit_switch_progress(&app, "preparing", "开始切换账号...", 5, "running");
     

@@ -511,6 +511,13 @@ export interface Settings {
   startTrial?: boolean;  // 是否以试用方式开始订阅
   teamName?: string;  // Teams 计划的团队名称
   seatCount?: number;  // Teams 计划的席位数量
+  // ==================== 额度耗尽自动切换（Fork 新增） ====================
+  autoSwitchEnabled?: boolean;  // 是否启用额度耗尽自动切换
+  autoSwitchCheckInterval?: number;  // 检查间隔（分钟）
+  autoSwitchThresholdPercent?: number;  // 使用率阈值（%），>= 时触发切换
+  autoSwitchRemainingThreshold?: number;  // 剩余积分阈值，0 表示忽略此条件
+  autoSwitchStrategy?: 'most_remaining' | 'round_robin';  // 选号策略
+  autoSwitchPreferSameProvider?: boolean;  // 优先选择同认证体系的账号
 }
 
 /**

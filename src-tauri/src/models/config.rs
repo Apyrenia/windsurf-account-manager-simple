@@ -142,6 +142,35 @@ pub struct Settings {
     pub backup_interval: i32,  // 自动备份间隔（分钟）
     #[serde(default = "default_backup_max_count", rename = "backupMaxCount")]
     pub backup_max_count: i32,  // 最大备份数量
+
+    // ==================== 额度耗尽自动切换（Fork 新增） ====================
+    // 当当前 Windsurf 账号的额度低于阈值时，自动切换到剩余配额最多的可用账号。
+    // 依赖：seamless_switch_enabled（无感换号补丁）已应用时切换体验最佳，
+    // 否则切换后 Windsurf 需要重启。
+    #[serde(default, rename = "autoSwitchEnabled")]
+    pub auto_switch_enabled: bool,  // 是否启用额度耗尽自动切换
+    #[serde(default = "default_auto_switch_check_interval", rename = "autoSwitchCheckInterval")]
+    pub auto_switch_check_interval: i32,  // 检查间隔（分钟）
+    #[serde(default = "default_auto_switch_threshold_percent", rename = "autoSwitchThresholdPercent")]
+    pub auto_switch_threshold_percent: i32,  // 使用率阈值（%）：>= 该值时触发切换
+    #[serde(default, rename = "autoSwitchRemainingThreshold")]
+    pub auto_switch_remaining_threshold: i32,  // 剩余积分阈值（同时满足才触发，0 表示禁用此条件）
+    #[serde(default = "default_auto_switch_strategy", rename = "autoSwitchStrategy")]
+    pub auto_switch_strategy: String,  // 选号策略："most_remaining" | "round_robin"
+    #[serde(default = "default_true", rename = "autoSwitchPreferSameProvider")]
+    pub auto_switch_prefer_same_provider: bool,  // 优先选择同认证体系（firebase/devin）的账号
+}
+
+fn default_auto_switch_check_interval() -> i32 {
+    5  // 默认 5 分钟
+}
+
+fn default_auto_switch_threshold_percent() -> i32 {
+    95  // 默认 95% 使用率触发
+}
+
+fn default_auto_switch_strategy() -> String {
+    "most_remaining".to_string()
 }
 
 fn default_browser_mode() -> String {
@@ -224,6 +253,13 @@ impl Default for Settings {
             auto_backup_enabled: true,  // 默认启用自动备份
             backup_interval: 10,  // 默认10分钟
             backup_max_count: 10,  // 默认最多10份
+            // 额度耗尽自动切换（Fork 新增）：默认关闭，避免对存量用户造成意外行为
+            auto_switch_enabled: false,
+            auto_switch_check_interval: 5,
+            auto_switch_threshold_percent: 95,
+            auto_switch_remaining_threshold: 0,
+            auto_switch_strategy: "most_remaining".to_string(),
+            auto_switch_prefer_same_provider: true,
         }
     }
 }

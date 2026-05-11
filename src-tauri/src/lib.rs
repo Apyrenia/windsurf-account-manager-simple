@@ -268,6 +268,9 @@ pub fn run() {
             commands::get_reset_stats,
             commands::clear_reset_records,
 
+            // 额度耗尽自动切换命令（Fork 新增）
+            commands::check_and_auto_switch,
+
             // Devin Session 账密登录
             commands::devin_check_connections,
             commands::devin_password_login,

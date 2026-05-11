@@ -615,6 +615,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   User,
   Folder,
@@ -803,6 +804,83 @@ async function executeAutoResetCheck(configId: string) {
   } catch (error) {
     console.error('[AutoReset] 检查失败:', error);
   }
+}
+
+// ==================== 额度耗尽自动切换定时器（Fork 新增） ====================
+//
+// 与 auto_reset 的实现思路对齐：
+// - 前端持有定时器，按 Settings.autoSwitchCheckInterval 周期性调用后端
+// - 后端 check_and_auto_switch 内部判断 enabled 开关，前端不重复判断
+// - 仅当 settings.autoSwitchEnabled 为 true 时启动定时器
+// - watch settings 变化即时重启定时器，避免用户改了配置不生效
+const autoSwitchTimer = ref<ReturnType<typeof setInterval> | null>(null);
+let autoSwitchUnlisten: UnlistenFn | null = null;
+
+async function executeAutoSwitchCheck() {
+  try {
+    const result = await apiService.checkAndAutoSwitch();
+    if (result.triggered) {
+      ElMessage.success(
+        `[自动切换] ${result.current_email} → ${result.switched_to_email}`
+      );
+      // 切换后刷新账号列表（新账号的 last_login_at 等字段会变）
+      await accountsStore.loadAccounts();
+      await fetchCurrentWindsurfInfo();
+    } else if (result.reason && !result.reason.includes('未达切换条件')) {
+      // 触发失败/跳过的告警类原因（不包括正常的"未达阈值"）
+      console.warn('[AutoSwitch]', result.reason);
+    }
+  } catch (error) {
+    console.error('[AutoSwitch] 检查失败:', error);
+  }
+}
+
+function clearAutoSwitchTimer() {
+  if (autoSwitchTimer.value) {
+    clearInterval(autoSwitchTimer.value);
+    autoSwitchTimer.value = null;
+  }
+}
+
+function initAutoSwitchTimer() {
+  clearAutoSwitchTimer();
+
+  const s = settingsStore.settings as any;
+  if (!s?.autoSwitchEnabled) {
+    return;
+  }
+
+  const intervalMin = Math.max(1, Number(s.autoSwitchCheckInterval) || 5);
+  console.log(`[AutoSwitch] 启动定时器：每 ${intervalMin} 分钟检查一次`);
+
+  // 启动后延迟 30 秒做第一次检查（避开应用启动高峰）
+  window.setTimeout(() => {
+    executeAutoSwitchCheck();
+  }, 30 * 1000);
+
+  autoSwitchTimer.value = setInterval(() => {
+    executeAutoSwitchCheck();
+  }, intervalMin * 60 * 1000);
+}
+
+// 后端 emit 的切换结果事件（手动测试 + 定时器都会触发，避免重复 toast）
+async function setupAutoSwitchListener() {
+  if (autoSwitchUnlisten) {
+    autoSwitchUnlisten();
+    autoSwitchUnlisten = null;
+  }
+  autoSwitchUnlisten = await listen<{
+    triggered: boolean;
+    current_email?: string;
+    switched_to_email?: string;
+    reason?: string;
+  }>('auto-switch-result', (event) => {
+    const payload = event.payload;
+    // triggered=false 但 reason 是兜底警示（如"无可用账号"），用 warning toast
+    if (!payload.triggered && payload.reason && payload.current_email) {
+      ElMessage.warning(`[自动切换] ${payload.reason}`);
+    }
+  });
 }
 
 // 筛选面板状态
@@ -2160,6 +2238,10 @@ onMounted(async () => {
   // 初始化自动重置定时器
   initAutoResetTimers();
 
+  // 初始化额度耗尽自动切换（Fork 新增）
+  initAutoSwitchTimer();
+  setupAutoSwitchListener();
+
   // 启动静默检测更新（延迟 3 秒，避开启动高峰；store 内部 24h 防抖 + 跳过版本）
   window.setTimeout(async () => {
     try {
@@ -2173,12 +2255,33 @@ onMounted(async () => {
   }, 3000);
 });
 
+// 监听设置变化，自动切换的开关/间隔变化时即时重启定时器（Fork 新增）
+watch(
+  () => {
+    const s = settingsStore.settings as any;
+    return {
+      enabled: s?.autoSwitchEnabled ?? false,
+      interval: s?.autoSwitchCheckInterval ?? 5,
+    };
+  },
+  () => {
+    initAutoSwitchTimer();
+  },
+  { deep: false }
+);
+
 // 组件卸载时清除自动重置定时器
 onUnmounted(() => {
   clearSidebarMenuTimer();
   clearAccountRenderFrame();
   autoResetTimerMap.value.forEach(timer => clearInterval(timer));
   autoResetTimerMap.value.clear();
+  // 清理自动切换定时器与监听器（Fork 新增）
+  clearAutoSwitchTimer();
+  if (autoSwitchUnlisten) {
+    autoSwitchUnlisten();
+    autoSwitchUnlisten = null;
+  }
 });
 </script>
 
