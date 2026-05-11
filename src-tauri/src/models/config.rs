@@ -154,7 +154,7 @@ pub struct Settings {
     #[serde(default = "default_auto_switch_threshold_percent", rename = "autoSwitchThresholdPercent")]
     pub auto_switch_threshold_percent: i32,  // 使用率阈值（%）：>= 该值时触发切换
     #[serde(default, rename = "autoSwitchRemainingThreshold")]
-    pub auto_switch_remaining_threshold: i32,  // 剩余积分阈值（同时满足才触发，0 表示禁用此条件）
+    pub auto_switch_remaining_threshold: i32,  // 剩余配额百分比阈值（0-100，同时满足才触发；0 表示禁用此条件；兼容新版 QUOTA 与旧版积分两套计费）
     #[serde(default = "default_auto_switch_strategy", rename = "autoSwitchStrategy")]
     pub auto_switch_strategy: String,  // 选号策略："most_remaining" | "round_robin"
     #[serde(default = "default_true", rename = "autoSwitchPreferSameProvider")]

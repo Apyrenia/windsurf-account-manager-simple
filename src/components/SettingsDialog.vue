@@ -623,16 +623,16 @@
             </div>
           </el-form-item>
 
-          <el-form-item label="剩余积分阈值" v-if="settings.autoSwitchEnabled">
+          <el-form-item label="剩余配额百分比阈值" v-if="settings.autoSwitchEnabled">
             <el-input-number
               v-model="settings.autoSwitchRemainingThreshold"
               :min="0"
-              :max="100000"
-              :step="100"
+              :max="100"
+              :step="1"
             />
-            <span style="margin-left: 10px; color: #909399;">积分（0=禁用此条件）</span>
+            <span style="margin-left: 10px; color: #909399;">%（0=禁用此条件）</span>
             <div style="margin-top: 5px; color: #909399; font-size: 12px;">
-              额外限制：剩余积分 ≤ 此值时才触发切换（与使用率阈值同时满足才切）。设为 0 表示只看使用率
+              额外限制：剩余配额百分比 ≤ 此值时才触发切换（与使用率阈值同时满足才切）。设为 0 表示只看使用率。兼容新版 QUOTA 与旧版积分两套计费
             </div>
           </el-form-item>
 
@@ -1498,12 +1498,12 @@ async function handleAutoSwitchTest() {
       ElMessage.success(
         `已自动切换：${result.current_email} → ${result.switched_to_email}` +
           (result.switched_to_remaining != null
-            ? `（新账号剩余 ${result.switched_to_remaining}）`
+            ? `（新账号剩余 ${result.switched_to_remaining}%）`
             : '')
       );
     } else if (result.current_email) {
       ElMessage.info(
-        `当前账号 ${result.current_email}：使用率 ${result.current_usage_percent ?? '?'}%，剩余 ${result.current_remaining ?? '?'}。${result.reason ?? ''}`
+        `当前账号 ${result.current_email}：使用率 ${result.current_usage_percent ?? '?'}%，剩余 ${result.current_remaining ?? '?'}%。${result.reason ?? ''}`
       );
     } else {
       ElMessage.warning(result.reason || '未触发切换');

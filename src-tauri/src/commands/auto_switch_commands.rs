@@ -14,7 +14,7 @@
 //!     ├─ 1. 读取 Settings.auto_switch_enabled 等开关
 //!     ├─ 2. get_current_windsurf_info → 拿到当前活跃账号的 email
 //!     ├─ 3. 在账号库里按 email 匹配 → 当前 Account
-//!     ├─ 4. GetPlanStatus API 查实时配额（used / available）
+//!     ├─ 4. GetPlanStatus API 查实时配额（兼容新版 QUOTA / 旧版 CREDIT 两套计费）
 //!     ├─ 5. 与阈值对比 → 是否需要切换？
 //!     ├─ 6. 否：返回 { triggered: false, reason }
 //!     └─ 7. 是：选号策略 → perform_account_switch → 返回 { triggered: true, switched_to }
@@ -39,6 +39,9 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 /// 自动切换决策结果（用于前端日志/toast）
+///
+/// 所有 `*_percent` / `*_remaining` 字段均为 0-100 百分比单位，
+/// 统一兼容新版 QUOTA（按日/周配额百分比）和旧版 CREDIT（按积分使用率换算）两套计费体系。
 #[derive(Debug, Clone, Serialize)]
 struct AutoSwitchResult {
     /// 是否实际触发了切换
@@ -47,11 +50,11 @@ struct AutoSwitchResult {
     current_email: Option<String>,
     /// 当前账号使用率百分比（0-100）
     current_usage_percent: Option<i32>,
-    /// 当前账号剩余配额
+    /// 当前账号剩余配额百分比（0-100）
     current_remaining: Option<i32>,
     /// 切换目标账号邮箱
     switched_to_email: Option<String>,
-    /// 切换目标账号剩余配额
+    /// 切换目标账号剩余配额百分比（0-100）
     switched_to_remaining: Option<i32>,
     /// 跳过/失败的原因
     reason: Option<String>,
@@ -150,38 +153,33 @@ pub async fn check_and_auto_switch(
     };
 
     let windsurf_service = WindsurfService::new();
-    let (used_quota, total_quota) = match query_account_quota(&windsurf_service, &current_ctx).await
-    {
-        Ok(pair) => pair,
-        Err(e) => {
-            warn!("[AutoSwitch] 查询当前账号配额失败: {}", e);
-            return Ok(serde_json::to_value(AutoSwitchResult::skipped(format!(
-                "查询配额失败: {}",
-                e
-            )))
-            .unwrap_or(json!({"triggered": false})));
-        }
-    };
-
-    let remaining = (total_quota - used_quota).max(0);
-    let usage_percent = if total_quota > 0 {
-        ((used_quota as f64 / total_quota as f64) * 100.0).round() as i32
-    } else {
-        0
-    };
+    let (usage_percent, remaining_percent) =
+        match query_account_quota(&windsurf_service, &current_ctx).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!("[AutoSwitch] 查询当前账号配额失败: {}", e);
+                return Ok(serde_json::to_value(AutoSwitchResult::skipped(format!(
+                    "查询配额失败: {}",
+                    e
+                )))
+                .unwrap_or(json!({"triggered": false})));
+            }
+        };
 
     info!(
-        "[AutoSwitch] 当前账号 {}: used={}, total={}, remaining={}, usage={}%",
-        current_email, used_quota, total_quota, remaining, usage_percent
+        "[AutoSwitch] 当前账号 {}: usage={}%, remaining={}%",
+        current_email, usage_percent, remaining_percent
     );
 
     // ============ Step 5: 判断是否触发切换 ============
     //
     // 触发条件（同时满足）：
-    // 1. 使用率 >= 阈值
-    // 2. 剩余阈值条件（>0 时必须 remaining <= 阈值；=0 时不参与判断）
+    // 1. 使用率百分比 >= 阈值（默认 95%）
+    // 2. 剩余配额百分比 <= 阈值（默认 5%；=0 时跳过该判定）
+    //
+    // 单位均为 0-100 百分比，新旧两套计费已在 query_account_quota 里统一。
     let usage_condition = usage_percent >= threshold_percent;
-    let remaining_condition = remaining_threshold == 0 || remaining <= remaining_threshold;
+    let remaining_condition = remaining_threshold == 0 || remaining_percent <= remaining_threshold;
     let should_switch = usage_condition && remaining_condition;
 
     if !should_switch {
@@ -189,10 +187,10 @@ pub async fn check_and_auto_switch(
             "triggered": false,
             "current_email": current_email,
             "current_usage_percent": usage_percent,
-            "current_remaining": remaining,
+            "current_remaining": remaining_percent,
             "reason": format!(
-                "未达切换条件（使用率 {}% < {}% 或剩余 {} > {}）",
-                usage_percent, threshold_percent, remaining, remaining_threshold
+                "未达切换条件（使用率 {}% < {}% 或剩余 {}% > {}%）",
+                usage_percent, threshold_percent, remaining_percent, remaining_threshold
             )
         }));
     }
@@ -215,7 +213,7 @@ pub async fn check_and_auto_switch(
                 triggered: false,
                 current_email: Some(current_email.clone()),
                 current_usage_percent: Some(usage_percent),
-                current_remaining: Some(remaining),
+                current_remaining: Some(remaining_percent),
                 switched_to_email: None,
                 switched_to_remaining: None,
                 reason: Some("当前账号已耗尽，但没有其他可用账号".to_string()),
@@ -226,14 +224,19 @@ pub async fn check_and_auto_switch(
     };
 
     let target_email = target.email.clone();
-    let target_remaining = target
-        .total_quota
-        .zip(target.used_quota)
-        .map(|(t, u)| (t - u).max(0));
+    let target_remaining_pct = account_remaining_percent(&target);
+    let target_remaining = if target_remaining_pct >= 0 {
+        Some(target_remaining_pct)
+    } else {
+        None
+    };
 
     info!(
-        "[AutoSwitch] 触发切换: {} → {} (策略={}, 目标剩余={:?})",
-        current_email, target_email, strategy, target_remaining
+        "[AutoSwitch] 触发切换: {} → {} (策略={}, 目标剩余={}%)",
+        current_email,
+        target_email,
+        strategy,
+        target_remaining_pct
     );
 
     // ============ Step 7: 调用核心切号流程 ============
@@ -257,7 +260,7 @@ pub async fn check_and_auto_switch(
                 triggered: false,
                 current_email: Some(current_email),
                 current_usage_percent: Some(usage_percent),
-                current_remaining: Some(remaining),
+                current_remaining: Some(remaining_percent),
                 switched_to_email: None,
                 switched_to_remaining: None,
                 reason: Some(format!("切换失败: {}", e)),
@@ -292,7 +295,7 @@ pub async fn check_and_auto_switch(
             triggered: false,
             current_email: Some(current_email),
             current_usage_percent: Some(usage_percent),
-            current_remaining: Some(remaining),
+            current_remaining: Some(remaining_percent),
             switched_to_email: None,
             switched_to_remaining: None,
             reason: Some(format!("切换失败: {}", err_msg)),
@@ -306,8 +309,8 @@ pub async fn check_and_auto_switch(
         OperationType::SwitchAccount,
         OperationStatus::Success,
         format!(
-            "自动切换成功（额度耗尽）: {} → {} [当前使用率 {}%, 剩余 {}]",
-            current_email, target_email, usage_percent, remaining
+            "自动切换成功（额度耗尽）: {} → {} [当前使用率 {}%, 剩余 {}%]",
+            current_email, target_email, usage_percent, remaining_percent
         ),
     )
     .with_account(target.id, target_email.clone());
@@ -317,7 +320,7 @@ pub async fn check_and_auto_switch(
         triggered: true,
         current_email: Some(current_email),
         current_usage_percent: Some(usage_percent),
-        current_remaining: Some(remaining),
+        current_remaining: Some(remaining_percent),
         switched_to_email: Some(target_email),
         switched_to_remaining: target_remaining,
         reason: None,
@@ -327,11 +330,23 @@ pub async fn check_and_auto_switch(
     Ok(serde_json::to_value(&result).unwrap_or(json!({"triggered": true})))
 }
 
-/// 查询账号的已用 / 总配额
+/// 查询账号配额，返回 `(usage_percent, remaining_percent)`，单位均为 0-100 百分比
 ///
-/// 返回 `(used_quota, total_quota)`，对齐 auto_reset_commands 中的计算口径：
-/// - `used = used_prompt_credits + used_flex_credits`
-/// - `total = available_flex_credits + available_prompt_credits`
+/// ## 兼容两套计费体系
+///
+/// Windsurf 历史上有两套计费：
+/// - **新版 QUOTA（当前生效）**：按日/周配额百分比计算（`daily_quota_remaining_percent` /
+///   `weekly_quota_remaining_percent`），值域 0-100
+/// - **旧版 CREDIT（已废弃）**：按积分使用率计算（`used_*_credits` /
+///   `available_*_credits`），单位为整数积分
+///
+/// 本函数**优先**读取新版 QUOTA 字段；如果两个 quota 字段都为空（旧账号或服务端降级），
+/// 才 fallback 到 CREDIT 字段并换算成百分比。结果统一为 0-100 百分比，调用方无需关心计费类型。
+///
+/// ## QUOTA 模式聚合规则
+///
+/// 当账号同时有日配额和周配额时，取**剩余更少**的那个作为决策依据
+/// （即"最先耗尽"的口径，最保守，避免日配额已满但周配额还多导致漏切）。
 async fn query_account_quota(
     service: &WindsurfService,
     ctx: &AuthContext,
@@ -341,6 +356,26 @@ async fn query_account_quota(
         .get("plan_status")
         .unwrap_or(&plan_status);
 
+    // === 新版 QUOTA 模式优先 ===
+    let daily_remaining = ps.get("daily_quota_remaining_percent").and_then(|v| v.as_i64());
+    let weekly_remaining = ps
+        .get("weekly_quota_remaining_percent")
+        .and_then(|v| v.as_i64());
+
+    if daily_remaining.is_some() || weekly_remaining.is_some() {
+        // 取日/周中"剩余更少"作为决策依据（即"最先耗尽"的那条）
+        let min_remaining = match (daily_remaining, weekly_remaining) {
+            (Some(d), Some(w)) => d.min(w),
+            (Some(d), None) => d,
+            (None, Some(w)) => w,
+            _ => 100,
+        }
+        .clamp(0, 100) as i32;
+        let usage_percent = (100 - min_remaining).clamp(0, 100);
+        return Ok((usage_percent, min_remaining));
+    }
+
+    // === 降级：旧版 CREDIT 模式 ===
     let used_prompt = ps
         .get("used_prompt_credits")
         .and_then(|v| v.as_i64())
@@ -358,9 +393,41 @@ async fn query_account_quota(
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
-    let used = (used_prompt + used_flex) as i32;
-    let total = (available_flex + available_prompt) as i32;
-    Ok((used, total))
+    let used = used_prompt + used_flex;
+    let total = available_flex + available_prompt;
+
+    if total > 0 {
+        let usage_percent = ((used as f64 / total as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
+        let remaining_percent = (100 - usage_percent).clamp(0, 100);
+        Ok((usage_percent, remaining_percent))
+    } else {
+        // 没数据：当作 0% 使用、100% 剩余（不会触发切换，保守安全）
+        Ok((0, 100))
+    }
+}
+
+/// 计算账号的剩余配额百分比（0-100），用于 `pick_next_account` 的过滤和排序
+///
+/// 与 `query_account_quota` 的逻辑对齐，但读取的是 `Account` 模型里**已缓存**的字段
+/// （账号刷新时由 `refresh_account_info` / `login_account` 更新），不发网络请求。
+///
+/// ## 优先级
+/// 1. **QUOTA 模式**：取 `daily_quota_remaining_percent` / `weekly_quota_remaining_percent` 中较小者
+/// 2. **CREDIT 模式（fallback）**：从 `used_quota` / `total_quota` 换算
+/// 3. **无数据**：返回 -1（调用方据此过滤掉无配额数据的账号）
+fn account_remaining_percent(acc: &Account) -> i32 {
+    match (acc.daily_quota_remaining_percent, acc.weekly_quota_remaining_percent) {
+        (Some(d), Some(w)) => d.min(w).clamp(0, 100),
+        (Some(d), None) => d.clamp(0, 100),
+        (None, Some(w)) => w.clamp(0, 100),
+        (None, None) => match (acc.used_quota, acc.total_quota) {
+            (Some(u), Some(t)) if t > 0 => {
+                let usage = ((u as f64 / t as f64) * 100.0).round() as i32;
+                (100 - usage).clamp(0, 100)
+            }
+            _ => -1,
+        },
+    }
 }
 
 /// 根据策略从候选池中挑选下一个目标账号
@@ -369,22 +436,26 @@ async fn query_account_quota(
 /// 1. 不能是当前账号本身
 /// 2. 不能是 `is_disabled = Some(true)`
 /// 3. 必须有 `token`（refresh_token 二选一即可，但 token 是后续 perform_account_switch 必需）
-/// 4. 必须有 `total_quota` 和 `used_quota` 字段（即至少刷新过一次）
-/// 5. 剩余配额必须 > `min_remaining`（防止刚好够阈值的账号也被选上）
+/// 4. 必须有配额数据（QUOTA 字段或 CREDIT 字段二选一，否则跳过）
+/// 5. 剩余配额百分比必须 > `min_remaining_percent`（防止刚好够阈值的账号也被选上）
 ///
 /// ### 排序规则
-/// - `most_remaining`（默认）：剩余配额降序 → 最富的优先
+/// - `most_remaining`（默认）：剩余配额百分比降序 → 最富的优先
 /// - `round_robin`：按 `last_login_at` 升序 → 最久没用的优先（轮换）
 ///
 /// ### `prefer_same_provider`
 /// 启用时优先返回与当前账号同认证体系（Firebase/Devin）的账号，
 /// 避免不必要的认证链路切换。如果同体系无候选则降级到全部候选。
+///
+/// ### 单位说明
+/// `min_remaining_percent` 为 0-100 百分比单位，与 `query_account_quota` 返回值对齐。
+/// 例如设为 5 表示"剩余 ≤ 5% 的账号不能被选为目标"。
 fn pick_next_account(
     all_accounts: &[Account],
     current: &Account,
     prefer_same_provider: bool,
     strategy: &str,
-    min_remaining: i32,
+    min_remaining_percent: i32,
 ) -> Option<Account> {
     let current_is_devin = current.is_devin_account();
 
@@ -407,17 +478,15 @@ fn pick_next_account(
         if !has_token {
             return false;
         }
-        // 必须有配额数据
-        let (used, total) = match (acc.used_quota, acc.total_quota) {
-            (Some(u), Some(t)) => (u, t),
-            _ => return false,
-        };
-        let remaining = total - used;
-        // 剩余必须严格大于阈值（如果设置了）；阈值为 0 时只要 remaining > 0
-        if min_remaining > 0 {
-            remaining > min_remaining
+        // 必须有配额数据（QUOTA 或 CREDIT 任一），并且剩余百分比严格大于阈值
+        let remaining_pct = account_remaining_percent(acc);
+        if remaining_pct < 0 {
+            return false; // 没配额数据
+        }
+        if min_remaining_percent > 0 {
+            remaining_pct > min_remaining_percent
         } else {
-            remaining > 0
+            remaining_pct > 0
         }
     };
 
@@ -440,19 +509,11 @@ fn pick_next_account(
                     (None, None) => std::cmp::Ordering::Equal,
                 });
             }
-            // 默认 "most_remaining"
+            // 默认 "most_remaining"：按剩余百分比降序
             _ => {
                 pool.sort_by(|a, b| {
-                    let ra = a
-                        .total_quota
-                        .zip(a.used_quota)
-                        .map(|(t, u)| t - u)
-                        .unwrap_or(0);
-                    let rb = b
-                        .total_quota
-                        .zip(b.used_quota)
-                        .map(|(t, u)| t - u)
-                        .unwrap_or(0);
+                    let ra = account_remaining_percent(a);
+                    let rb = account_remaining_percent(b);
                     rb.cmp(&ra)
                 });
             }
