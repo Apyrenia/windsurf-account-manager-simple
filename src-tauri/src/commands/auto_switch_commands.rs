@@ -32,13 +32,28 @@ use crate::commands::windsurf_info::get_current_windsurf_info;
 use crate::models::{Account, OperationLog, OperationStatus, OperationType};
 use crate::repository::DataStore;
 use crate::services::{AuthContext, WindsurfService};
+use futures::stream::{self, StreamExt};
 use log::{info, warn};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
+
+/// Step 5.5 批量刷新候选配额时的并发度上限
+///
+/// 设为 5 是 rate limit 防御与刷新速度的折中：
+/// - 太高（如 20）→ 同时打 GetPlanStatus 撞 Windsurf 速率限制
+/// - 太低（如 1）→ 30 个候选要等 30 秒才能开始切换
+const REFRESH_CONCURRENCY: usize = 5;
+
+/// 单个候选账号实时配额查询的超时秒数
+///
+/// query_quota_summary 内部 reqwest 已有自带超时，这里再加一层 tokio::time::timeout
+/// 防止极端情况下某个账号的网络阻塞拖慢整个批量刷新。
+const REFRESH_TIMEOUT_SECS: u64 = 8;
 
 /// 自动切换决策结果（用于前端日志/toast）
 ///
@@ -197,16 +212,126 @@ pub async fn check_and_auto_switch(
         }));
     }
 
-    // ============ Step 6: 选号 + 实时验证候选账号配额 ============
+    // ============ Step 5.5: 批量并行刷新所有候选账号的实时配额 ============
     //
-    // ⚠️ 关键修复（fork v1.7.11+）：原来 pick_next_account 只读本地 DB 缓存的
-    //   `daily/weekly_quota_remaining_percent` 字段做决策。但这些字段可能陈旧
-    //   （新版 Windsurf API 对配额耗尽账号会省略 int_14 字段，导致历史 100% 值
-    //   永远刷不掉），结果反复切换到「DB 显示 100%、实际已耗尽」的废号。
+    // ⚠️ 关键修复（fork v1.8.x，用户反馈"切到 4% 账号"）：
     //
-    // 修复：选出 top 候选后，调一次 `query_quota_summary` **实时拉**该账号配额，
-    //   写回 DB（同时让 UI 看到刷新结果），并验证剩余配额仍然达标。不达标就
-    //   把该候选加入 excluded 名单、重新选下一个。重试上限防死循环。
+    // 原 Step 6 的"top1 实时验证 + 失败剔除重选"逻辑有缺陷：
+    //   - pick_next_account sort 时读的是 DB 缓存值
+    //   - DB 里很多账号显示 100%（实际是耗尽时 int_14 缺失保留的陈旧值）
+    //   - 这些 100% 排在前面，逐个验证发现 0% 剔除，最后才轮到真实 4% 的账号
+    //   - 用户体感：切到了「剩余 4%」这种废号
+    //
+    // 修复：在 sort 之前，把**所有合格候选**（排除自己、disabled、无 token）的
+    //   实时配额并行刷一遍写回 DB。这样：
+    //   1. 真正耗尽的废号（DB 100% / 实际 0%）刷新后变 0%，被 base_filter 过滤
+    //   2. pick_next_account sort 看到的就是真实最大配额账号
+    //   3. UI 也立刻看到候选池的真实剩余值
+    //
+    // 并发度 REFRESH_CONCURRENCY=5 防 rate limit；单调用 REFRESH_TIMEOUT_SECS=8s 防卡死。
+    let candidates_to_refresh: Vec<Account> = all_accounts
+        .iter()
+        .filter(|acc| {
+            if acc.id == current_account.id {
+                return false;
+            }
+            if acc.is_disabled == Some(true) {
+                return false;
+            }
+            let has_token = acc.token.as_ref().map(|t| !t.is_empty()).unwrap_or(false)
+                || acc
+                    .refresh_token
+                    .as_ref()
+                    .map(|t| !t.is_empty())
+                    .unwrap_or(false);
+            has_token
+        })
+        .cloned()
+        .collect();
+
+    if !candidates_to_refresh.is_empty() {
+        let total = candidates_to_refresh.len();
+        info!(
+            "[AutoSwitch] Step 5.5 并行刷新 {} 个候选账号实时配额（并发={}, 单超时={}s）",
+            total, REFRESH_CONCURRENCY, REFRESH_TIMEOUT_SECS
+        );
+
+        let service_ref = &windsurf_service;
+        let store_ref: &DataStore = &data_store;
+
+        let refresh_count = stream::iter(candidates_to_refresh.into_iter())
+            .map(|mut acc| async move {
+                let ctx = match AuthContext::from_account(&acc) {
+                    Ok(c) if !c.token.is_empty() => c,
+                    _ => {
+                        return 0u32;
+                    }
+                };
+
+                let result = match tokio::time::timeout(
+                    Duration::from_secs(REFRESH_TIMEOUT_SECS),
+                    service_ref.query_quota_summary(&ctx),
+                )
+                .await
+                {
+                    Ok(Ok(s)) => s,
+                    Ok(Err(e)) => {
+                        warn!(
+                            "[AutoSwitch] 候选 {} 刷新失败: {}（保留 DB 旧值，pick 时可能被剔除）",
+                            acc.email, e
+                        );
+                        return 0;
+                    }
+                    Err(_) => {
+                        warn!(
+                            "[AutoSwitch] 候选 {} 刷新超时 {}s（保留 DB 旧值）",
+                            acc.email, REFRESH_TIMEOUT_SECS
+                        );
+                        return 0;
+                    }
+                };
+
+                // 写回最新配额字段（缺字段视同 0，与 apply_plan_status_to_account 语义一致）
+                let plan_status_node = result
+                    .raw_plan_status
+                    .get("plan_status")
+                    .unwrap_or(&result.raw_plan_status);
+                crate::commands::api_commands::apply_plan_status_to_account(
+                    plan_status_node,
+                    &mut acc,
+                );
+
+                if let Err(e) = store_ref.update_account(acc.clone()).await {
+                    warn!("[AutoSwitch] 候选 {} 配额写回 DB 失败: {}", acc.email, e);
+                }
+
+                info!(
+                    "[AutoSwitch] 候选 {} 刷新完成: 剩余 {}% (mode={})",
+                    acc.email, result.remaining_percent, result.billing_mode
+                );
+                1
+            })
+            .buffer_unordered(REFRESH_CONCURRENCY)
+            .fold(0u32, |acc, n| async move { acc + n })
+            .await;
+
+        info!(
+            "[AutoSwitch] Step 5.5 批量刷新完成：成功 {}/{}",
+            refresh_count, total
+        );
+    }
+
+    // 重读 all_accounts，让 Step 6 的 pick_next_account 看到最新刷新的值
+    let all_accounts = data_store
+        .get_all_accounts()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // ============ Step 6: 选号 + 实时验证候选账号配额（保险层）============
+    //
+    // Step 5.5 已经把所有候选实时刷新过一遍，这里的循环主要是兜底：
+    // 万一刷新到切换之间又有变化（极少见），仍然做一次单候选实时校验。
+    // 通常这个循环第一次就能 pass 返回。
     const MAX_VERIFY_RETRIES: usize = 5;
     let mut excluded_ids: HashSet<Uuid> = HashSet::new();
     let target = loop {

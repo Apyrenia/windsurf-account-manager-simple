@@ -36,7 +36,7 @@ Git remote setup: `origin` → this fork, `upstream` → chaogei. To sync upstre
 
 ## 📦 Project Information
 
-- **Current Version**: 1.8.0
+- **Current Version**: 1.8.1
 - **License**: AGPL-3.0
 - **Development Language**: Rust + TypeScript
 - **Supported Platforms**: Windows 10/11
@@ -156,6 +156,24 @@ This fork's maintainer does **not** run any WeChat / QQ group. For all issues pl
 ---
 
 ## 📜 Version History
+
+### v1.8.1 (2026-05-12) — Auto-Switch Selection Logic Improvement
+
+**🐛 Fixed (user-reported)**
+
+- **Auto-switch picks accounts with very low remaining quota (e.g. 4%)**: v1.8.0's "top-1 live verify + exclude-and-repick" loop still sorted candidates by DB cache values. If the pool had multiple stale-100% zombie accounts, they ranked first, got verified, found exhausted, were excluded — until finally the truly-low-but-real account got picked. **Fix**: before sorting, **batch-refresh live quota of all eligible candidates in parallel** and write back to DB. Sort then sees real data and naturally picks the truly-most-remaining account.
+
+**🛡️ Safeguards**
+
+- Refresh concurrency capped at **5** (avoid Windsurf API rate limit)
+- Per-candidate query timeout **8 seconds** (one slow account can't stall the whole flow)
+- Failed/timed-out accounts keep DB stale value; Step 6 single-candidate verification still runs as a safety net
+
+**📦 Side-effect bonus**
+
+- One auto-switch trigger = refresh live quota for the entire account pool (max 5 concurrent). UI immediately shows real remaining values for every candidate, **stale-100% zombie accounts all drop to 0%** — no more need to manually click "Refresh Account Info" one by one.
+
+---
 
 ### v1.8.0 (2026-05-12) — Apyrenia Fork Initial Release
 
