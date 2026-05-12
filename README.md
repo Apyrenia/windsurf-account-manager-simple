@@ -1,12 +1,57 @@
-# Windsurf Account Manager - Simple
+# Windsurf Account Manager - Simple（Apyrenia Fork）
 
-一个基于 Tauri + Vue 3 + TypeScript 开发的 Windsurf 多账号管理桌面应用，用于管理多个 Windsurf 账号并提供积分重置、账单查询、一键换号、订阅支付等功能。
+> 🍴 **本仓库是 [chaogei/windsurf-account-manager-simple](https://github.com/chaogei/windsurf-account-manager-simple) 的 fork**，基于 v1.7.11 二开。  
+> 完全开源，AGPL-3.0 协议传承。**反对任何形式的闭源二开商业贩卖。**
+
+一个基于 Tauri + Vue 3 + TypeScript 开发的 Windsurf 多账号管理桌面应用，用于管理多个 Windsurf 账号并提供一键换号、配额自动切换等功能。
 
 > ⚠️ **免费软件声明**：本软件完全免费，如果你是付费购买的，说明你被骗了！
 
-## 📦 项目信息
+---
 
-- **当前版本**: 1.7.9
+## 🆕 本 fork 改了什么
+
+### ✨ 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| **配额耗尽自动切换** | 定时轮询当前账号配额，达到使用率阈值或剩余阈值时自动切换到下一个可用账号。完全兼容 Windsurf **新版 QUOTA 计费体系**（日/周配额百分比）和**旧版 CREDITS 计费**（积分）两种模式。设置入口：侧边栏 → 自动切换 |
+| **侧边栏快捷入口** | 「自动切换」菜单 + 启用时绿色 ON 徽标，状态一目了然 |
+
+### 🐛 关键 bug 修复
+
+| 现象 | 根因 | 修复 |
+|------|------|------|
+| **日配额用完了 UI 还显示 100%** | Windsurf 新版 API 对某些账号（如 Devin Trial 配额耗尽时）会**省略** `int_14` 字段。chaogei 原代码 "字段存在才更新" 导致数据库陈旧的满额值永远刷不掉 | 后端 `apply_plan_status_to_account` + 前端 `handleRefreshToken` merge 逻辑统一改为：**字段缺失视同 0%（耗尽）** |
+| **点「刷新账号信息」没反应，「重新登录」才能更新** | 同上，前端 merge 走的逻辑分支与后端不一致 | 前端逻辑对齐后端 |
+| **`auto_switch` / `auto_reset` 在新版账号上判断完全失效** | 上游代码只解析旧版 CREDITS 字段（在新版 QUOTA 账号上恒为 0） | 抽 `WindsurfService::query_quota_summary` 公用方法，标准化输出 `QuotaSummary`，兼容两套计费体系。所有上层（auto_switch、auto_reset、未来的额度监控）都用它 |
+| **检查间隔配 1 分钟会触发 rate limit** | `GetPlanStatus` 接口有限速 | 检查间隔下限锁 3 分钟（UI + 运行时双 clamp），加风险提示 |
+
+### 🧹 UI 精简
+
+- **账号卡片底部按钮**：18 个 → 6 个（刷新Token / 账号信息 / 删除 / 编辑 / 重新登录 / 无感切号）
+- **侧边栏「自动重置」入口隐藏**（fork 维护者认为该功能在新版配额体系下意义有限，且座位重置 API 易触发限流）
+- 移除的功能代码**全部保留**在源码里（用 `void` 引用 + HTML 注释方式），未来想恢复某个按钮只需取消注释，无需重建函数
+
+### � 与上游的关系
+
+```
+chaogei/windsurf-account-manager-simple (v1.7.11)
+                ↓ fork
+Apyrenia/windsurf-account-manager-simple (本仓库，v1.7.11+)
+```
+
+本仓库 git remote 配置：
+- `origin` → 本 fork
+- `upstream` → chaogei 上游
+
+未来想同步 chaogei 的更新：`git fetch upstream && git merge upstream/main`
+
+---
+
+## �📦 项目信息
+
+- **当前版本**: 1.7.11
 - **许可证**: AGPL-3.0
 - **开发语言**: Rust + TypeScript
 - **支持平台**: Windows 10/11
