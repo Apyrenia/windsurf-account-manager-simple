@@ -1229,11 +1229,18 @@ impl ProtobufParser {
             }
             
             // field 14: daily_quota_remaining_percent
+            //
+            // ⚠️ DEBUG (fork v1.7.11)：chaogei 把 int_14 命名为 "remaining"，但用户报告
+            // "日配额用完了却显示 100%"，怀疑字段语义实际是 "used_percent"。
+            // 临时打印 raw 值，方便对比账号实际状态验证字段语义。
+            // 验证完后可删此 println。
             if let Some(v) = plan_status.get("int_14").and_then(|v| v.as_i64()) {
+                println!("[PlanStatus DEBUG] int_14 (daily_quota_*_percent) raw value = {}", v);
                 result["daily_quota_remaining_percent"] = json!(v);
             }
             // field 15: weekly_quota_remaining_percent
             if let Some(v) = plan_status.get("int_15").and_then(|v| v.as_i64()) {
+                println!("[PlanStatus DEBUG] int_15 (weekly_quota_*_percent) raw value = {}", v);
                 result["weekly_quota_remaining_percent"] = json!(v);
             }
             // field 16: overage_balance_micros

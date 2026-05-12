@@ -600,13 +600,16 @@
           <el-form-item label="检查间隔" v-if="settings.autoSwitchEnabled">
             <el-input-number
               v-model="settings.autoSwitchCheckInterval"
-              :min="1"
+              :min="3"
               :max="1440"
               :step="1"
             />
             <span style="margin-left: 10px; color: #909399;">分钟</span>
             <div style="margin-top: 5px; color: #909399; font-size: 12px;">
-              每隔多少分钟检查一次当前账号配额（建议 5 分钟，过短会增加 API 请求频率）
+              每隔多少分钟轮询 <code>GetPlanStatus</code> 接口检查配额。
+              <strong style="color: #f56c6c;">⚠️ 不要低于 3 分钟</strong>：实测 1 分钟会触发 Windsurf 速率限制，
+              导致 API 拒绝服务、配额无法刷新。
+              推荐 5 分钟（默认），账号多时建议 10-15 分钟。
             </div>
           </el-form-item>
 

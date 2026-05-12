@@ -65,10 +65,17 @@
           <template #title>统计信息</template>
         </el-menu-item>
         
+        <!--
+          ⚠️ 「自动重置」入口已隐藏（fork 个人版决定）
+          原因：本 fork 维护者认为该功能在新版 Windsurf 配额体系下意义有限，
+                而且其调用的 `update_seat_count` 接口被频繁调用容易触发 rate limit。
+          代码保留：`AutoResetDialog.vue` / `auto_reset_commands.rs` / 数据库字段 / 设置项 etc.
+                未删除以保持向上游兼容；如需重新启用，恢复下面 el-menu-item 即可。
         <el-menu-item index="auto-reset" @click="showAutoResetDialog = true">
           <el-icon><Timer /></el-icon>
           <template #title>自动重置</template>
         </el-menu-item>
+        -->
 
         <el-menu-item index="auto-switch" @click="uiStore.openSettingsDialog('auto-switch')">
           <el-icon><Switch /></el-icon>
@@ -863,7 +870,9 @@ function initAutoSwitchTimer() {
     return;
   }
 
-  const intervalMin = Math.max(1, Number(s.autoSwitchCheckInterval) || 5);
+  // ⚠️ 下限锁 3 分钟：实测 1 分钟会触发 Windsurf rate limit (GetPlanStatus 拒绝服务)
+  // 即使用户在配置文件里手改成 1，运行时也强制提到 3
+  const intervalMin = Math.max(3, Number(s.autoSwitchCheckInterval) || 5);
   console.log(`[AutoSwitch] 启动定时器：每 ${intervalMin} 分钟检查一次`);
 
   // 启动后延迟 30 秒做第一次检查（避开应用启动高峰）
