@@ -49,7 +49,7 @@ Apyrenia/windsurf-account-manager-simple (本仓库，v1.7.11+)
 
 ---
 
-## �📦 项目信息
+## � 项目信息
 
 - **当前版本**: 1.7.11
 - **许可证**: AGPL-3.0
@@ -59,13 +59,15 @@ Apyrenia/windsurf-account-manager-simple (本仓库，v1.7.11+)
 
 **🌐 English Version**: [README_EN.md](README_EN.md)
 
-## 📱 交流群
+## � 反馈与讨论
 
-<p align="center">
-  <img src="public/交流群.png" alt="微信群二维码" width="300">
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="public/QQ群.jpg" alt="QQ群二维码" width="300">
-</p>
+本 fork 作者**不运营任何微信 / QQ 群**。有问题请走 GitHub 官方渠道：
+
+- 🐛 **发现 Bug / 建议** → [GitHub Issues](https://github.com/Apyrenia/windsurf-account-manager-simple/issues)
+- 💡 **讨论 / 使用经验** → [GitHub Discussions](https://github.com/Apyrenia/windsurf-account-manager-simple/discussions)
+- 📝 **贡献代码** → Fork 本仓库、提交 PR；AGPL-3.0 协议自动继承
+
+> 上游 chaogei 官方仓库有自己的微信/QQ 社群，**但本 fork 作者不在其中**。请不要在 chaogei 的群里反馈本 fork 的问题，避免互相困扰。
 
 ---
 

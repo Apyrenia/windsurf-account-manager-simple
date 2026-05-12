@@ -1,12 +1,42 @@
-# Windsurf Account Manager - Simple
+# Windsurf Account Manager - Simple (Apyrenia Fork)
 
-A Windsurf multi-account management desktop application built with Tauri + Vue 3 + TypeScript, designed to manage multiple Windsurf accounts with features including credit reset, billing query, one-click account switching, subscription payment, and more.
+> 🍴 **This repository is a fork of [chaogei/windsurf-account-manager-simple](https://github.com/chaogei/windsurf-account-manager-simple)**, based on v1.7.11.
+> Fully open source under AGPL-3.0. **Opposes any form of closed-source commercial distribution.**
+
+A Windsurf multi-account management desktop application built with Tauri + Vue 3 + TypeScript, designed to manage multiple Windsurf accounts with features including one-click account switching and automatic quota-based switching.
 
 > ⚠️ **Free Software Notice**: This software is completely free. If you paid for it, you have been scammed!
 
+---
+
+## 🆕 What This Fork Changes
+
+### ✨ New Features
+
+- **Automatic quota-based switching**: Polls the current account's quota periodically; when the usage threshold or remaining threshold is reached, automatically switches to the next available account. Fully compatible with both Windsurf's **new QUOTA billing model** (daily/weekly percentage) and **legacy CREDITS model**.
+- **Sidebar shortcut**: "Auto Switch" menu entry with green ON badge when enabled.
+
+### 🐛 Key Bug Fixes
+
+- **Daily quota used but UI still shows 100%**: The new Windsurf API omits the `int_14` field for some accounts (e.g., Devin Trial after exhaustion). The original "update only if field exists" logic preserved stale full values forever. **Fix**: Treat missing fields as 0% (exhausted), both in backend `apply_plan_status_to_account` and frontend `handleRefreshToken`.
+- **"Refresh Account Info" button does nothing, only "Re-login" works**: Frontend merge logic was out of sync with backend. **Fix**: Aligned frontend logic with backend.
+- **`auto_switch` / `auto_reset` judgement completely broken on new-style accounts**: Original code only parsed legacy CREDITS fields. **Fix**: Extracted `WindsurfService::query_quota_summary` public method producing a standardized `QuotaSummary` compatible with both billing models.
+- **1-minute polling interval triggers rate limit**: `GetPlanStatus` endpoint is rate-limited. **Fix**: Lower bound clamped to 3 minutes (UI + runtime).
+
+### 🧹 UI Simplification
+
+- **Account card buttons**: 18 → 6 (Refresh Token / Account Info / Delete / Edit / Re-login / Seamless Switch)
+- **"Auto Reset" sidebar entry hidden** (kept in source for easy restore)
+
+### 🔗 Upstream Relationship
+
+Git remote setup: `origin` → this fork, `upstream` → chaogei. To sync upstream: `git fetch upstream && git merge upstream/main`.
+
+---
+
 ## 📦 Project Information
 
-- **Current Version**: 1.7.9
+- **Current Version**: 1.7.11
 - **License**: AGPL-3.0
 - **Development Language**: Rust + TypeScript
 - **Supported Platforms**: Windows 10/11
@@ -14,13 +44,15 @@ A Windsurf multi-account management desktop application built with Tauri + Vue 3
 
 **🌐 中文版本**: [README.md](README.md)
 
-## 📱 Community
+## � Feedback & Discussion
 
-<p align="center">
-  <img src="public/交流群.png" alt="WeChat Group QR Code" width="300">
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="public/QQ群.jpg" alt="QQ Group QR Code" width="300">
-</p>
+This fork's maintainer does **not** run any WeChat / QQ group. For all issues please use GitHub channels:
+
+- 🐛 **Bug reports / suggestions** → [GitHub Issues](https://github.com/Apyrenia/windsurf-account-manager-simple/issues)
+- 💡 **Discussion / tips** → [GitHub Discussions](https://github.com/Apyrenia/windsurf-account-manager-simple/discussions)
+- 📝 **Contributions** → Fork, submit PR; AGPL-3.0 inherited automatically
+
+> The upstream chaogei repo has its own WeChat/QQ communities, **but this fork's author is not in them**. Please don't ask about this fork in chaogei's groups to avoid confusion for everyone.
 
 ---
 

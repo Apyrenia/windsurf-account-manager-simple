@@ -51,15 +51,24 @@
         </div>
       </div>
 
-      <!-- 交流群 -->
+      <!--
+        fork v1.7.11：原上游有微信群二维码欢迎弹窗，本 fork 作者不运营任何社群，
+        改为引导到 GitHub Issues，避免新用户扫码加入 chaogei 官方群后就 fork 问题
+        咨询官方维护者，造成互相困扰。如需恢复原版，从 git history 取 v1.7.10 的版本。
+      -->
       <div class="group-section">
         <h3 class="section-title">
           <el-icon><ChatDotRound /></el-icon>
-          <span>加入交流群</span>
+          <span>反馈与讨论</span>
         </h3>
-        <div class="qr-container">
-          <img src="/交流群.png" alt="交流群二维码" class="qr-image" />
-          <p class="qr-tip">微信扫码加入交流群</p>
+        <div class="feedback-info">
+          <p class="feedback-line">
+            🐛 发现 Bug / 建议：<a href="https://github.com/Apyrenia/windsurf-account-manager-simple/issues" target="_blank">GitHub Issues</a>
+          </p>
+          <p class="feedback-line">
+            💡 使用讨论：<a href="https://github.com/Apyrenia/windsurf-account-manager-simple/discussions" target="_blank">GitHub Discussions</a>
+          </p>
+          <p class="feedback-tip">本 fork 作者不运营任何微信/QQ 群，请勿扫码加群咨询。</p>
         </div>
       </div>
 
@@ -292,6 +301,38 @@ function handleClosed() {
   color: #07c160;
 }
 
+/* fork v1.7.11：新 feedback section 样式（替代原二维码） */
+.feedback-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 4px;
+}
+
+.feedback-line {
+  margin: 0;
+  font-size: 14px;
+  color: #374151;
+  line-height: 1.6;
+}
+
+.feedback-line a {
+  color: #2563eb;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.feedback-line a:hover {
+  text-decoration: underline;
+}
+
+.feedback-tip {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #6b7280;
+  font-style: italic;
+}
+
 .qr-container {
   display: flex;
   flex-direction: column;
@@ -361,5 +402,16 @@ function handleClosed() {
 
 :root.dark .qr-tip {
   color: #888;
+}
+
+/* fork v1.7.11：feedback section 深色主题 */
+:root.dark .feedback-line {
+  color: #d1d5db;
+}
+:root.dark .feedback-line a {
+  color: #60a5fa;
+}
+:root.dark .feedback-tip {
+  color: #9ca3af;
 }
 </style>
