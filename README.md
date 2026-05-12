@@ -38,7 +38,7 @@
 ```
 chaogei/windsurf-account-manager-simple (v1.7.11)
                 ↓ fork
-Apyrenia/windsurf-account-manager-simple (本仓库，v1.7.11+)
+Apyrenia/windsurf-account-manager-simple (本仓库，v1.8.0)
 ```
 
 本仓库 git remote 配置：
@@ -51,7 +51,7 @@ Apyrenia/windsurf-account-manager-simple (本仓库，v1.7.11+)
 
 ## � 项目信息
 
-- **当前版本**: 1.7.11
+- **当前版本**: 1.8.0
 - **许可证**: AGPL-3.0
 - **开发语言**: Rust + TypeScript
 - **支持平台**: Windows 10/11
@@ -171,6 +171,36 @@ Apyrenia/windsurf-account-manager-simple (本仓库，v1.7.11+)
 ---
 
 ## 📜 版本历史
+
+### v1.8.0 (2026-05-12) — Apyrenia Fork 首发
+
+**🆕 新增**
+
+- **配额耗尽自动切换**（核心新功能）：定时轮询当前账号配额，达到使用率阈值或剩余阈值时自动切换到下一个可用账号。完全兼容新版 QUOTA 计费体系（日/周百分比）和旧版 CREDITS 计费（积分）。
+- **侧边栏「自动切换」入口** + 启用时绿色 ON 徽标。
+- **`WindsurfService::query_quota_summary` 公用方法**：标准化输出 `QuotaSummary`，所有上层（auto_switch / auto_reset / 未来的额度监控）只用一个入口，无需关心计费类型。
+
+**🐛 修复**
+
+- **日配额用完了 UI 显示 100%**：Windsurf 新版 API 对某些账号（Devin Trial 配额耗尽时）会**省略** `int_14` 字段。chaogei 原代码 "字段存在才更新" 导致数据库陈旧的满额值永远刷不掉。修复：后端 `apply_plan_status_to_account` + 前端 `handleRefreshToken` merge 逻辑统一改为「字段缺失视同 0%（耗尽）」。
+- **「刷新账号信息」按钮没反应、「重新登录」才有效**：前端 merge 走的逻辑分支与后端不一致。修复：前端逻辑对齐后端。
+- **`auto_switch` / `auto_reset` 在新版账号上判断完全失效**：上游代码只解析旧版 CREDITS 字段（在新版 QUOTA 账号上恒为 0）。修复：用 `query_quota_summary` 统一替换。
+- **自动切换会反复切到「DB 显示 100% 但实际耗尽」的废号**：选号策略只读本地 DB 缓存。修复：选定 top 候选后调一次 `query_quota_summary` 实时拉配额，写回 DB，验证仍达标才切；不达标则剔除该候选重选（最多 5 次防死循环）。
+- **检查间隔配 1 分钟会触发 rate limit**：`GetPlanStatus` 接口有限速。修复：检查间隔下限锁 3 分钟（UI + 运行时双 clamp），加风险提示。
+
+**🧹 UI 精简**
+
+- 账号卡片底部按钮：18 个 → 6 个（刷新Token / 账号信息 / 删除 / 编辑 / 重新登录 / 无感切号）。
+- 隐藏「自动重置」侧边栏入口（功能代码保留方便恢复）。
+- WelcomeDialog 启动弹窗的微信群二维码替换为 GitHub Issues / Discussions 引导，本 fork 作者不运营任何社群。
+
+**📦 项目元数据**
+
+- 版本号 1.7.11 → **1.8.0**（按 SemVer，新功能 = MINOR bump）。
+- README / README_EN 顶部增加 fork 说明，明确反对闭源贩卖。
+- Git remote：`origin` = 本 fork，`upstream` = chaogei 上游，方便未来同步。
+
+---
 
 ### v1.7.11 (2026-05-08)
 - **UI 首屏性能优化**：对 Settings、团队管理、自动重置、账号信息等重内容弹窗的 `el-tab-pane` 增加懒渲染，避免打开父弹窗时一次性挂载所有表格、表单和信息面板

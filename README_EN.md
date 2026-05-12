@@ -36,7 +36,7 @@ Git remote setup: `origin` → this fork, `upstream` → chaogei. To sync upstre
 
 ## 📦 Project Information
 
-- **Current Version**: 1.7.11
+- **Current Version**: 1.8.0
 - **License**: AGPL-3.0
 - **Development Language**: Rust + TypeScript
 - **Supported Platforms**: Windows 10/11
@@ -156,6 +156,36 @@ This fork's maintainer does **not** run any WeChat / QQ group. For all issues pl
 ---
 
 ## 📜 Version History
+
+### v1.8.0 (2026-05-12) — Apyrenia Fork Initial Release
+
+**🆕 Added**
+
+- **Auto-switch on quota exhaustion** (core new feature): periodically polls current account quota; when usage threshold or remaining threshold is reached, switches to next available account. Fully compatible with both new QUOTA billing (daily/weekly percentage) and legacy CREDITS billing (points).
+- **"Auto Switch" sidebar entry** with green ON badge when enabled.
+- **`WindsurfService::query_quota_summary` public method**: standardized `QuotaSummary` output, all upper-layer logic uses one entry, agnostic to billing type.
+
+**🐛 Fixed**
+
+- **Daily quota exhausted but UI shows 100%**: Windsurf's new API omits `int_14` for some accounts (e.g., Devin Trial after exhaustion). Original "update only if field exists" logic preserved stale full values forever. **Fix**: backend `apply_plan_status_to_account` + frontend `handleRefreshToken` merge logic both treat missing fields as 0% (exhausted).
+- **"Refresh Account Info" button does nothing, only "Re-login" works**: frontend merge logic was out of sync with backend. **Fix**: aligned frontend with backend.
+- **`auto_switch` / `auto_reset` judgement broken on new-style accounts**: original code only parsed legacy CREDITS fields. **Fix**: replaced with `query_quota_summary`.
+- **Auto-switch repeatedly switches to "DB shows 100% but actually exhausted" zombie accounts**: selection only read local DB cache. **Fix**: after picking top candidate, call `query_quota_summary` once to fetch live quota, write back to DB, verify still passes threshold; if not, exclude and re-pick (max 5 retries to prevent infinite loop).
+- **1-minute polling interval triggers rate limit**: `GetPlanStatus` is rate-limited. **Fix**: lower bound clamped to 3 minutes (UI + runtime), with warning.
+
+**🧹 UI Simplification**
+
+- Account card buttons: 18 → 6 (Refresh Token / Account Info / Delete / Edit / Re-login / Seamless Switch).
+- Hide "Auto Reset" sidebar entry (code preserved for easy restore).
+- WelcomeDialog: WeChat group QR code replaced with GitHub Issues / Discussions guidance; this fork's author runs no community channels.
+
+**📦 Metadata**
+
+- Version 1.7.11 → **1.8.0** (per SemVer: new features = MINOR bump).
+- README / README_EN top section adds fork explanation, explicitly opposing closed-source distribution.
+- Git remote: `origin` = this fork, `upstream` = chaogei upstream, for future sync.
+
+---
 
 ### v1.7.10 (2026-05-08)
 - **Initial UI load performance optimization**: Added lazy rendering to heavy `el-tab-pane` sections in Settings, Team Management, Auto Reset, Account Info, and related dialogs, preventing all tables, forms, and information panels from mounting when the parent dialog first opens

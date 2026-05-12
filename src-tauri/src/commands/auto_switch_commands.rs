@@ -35,8 +35,10 @@ use crate::services::{AuthContext, WindsurfService};
 use log::{info, warn};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
+use uuid::Uuid;
 
 /// 自动切换决策结果（用于前端日志/toast）
 ///
@@ -195,20 +197,114 @@ pub async fn check_and_auto_switch(
         }));
     }
 
-    // ============ Step 6: 按策略选择目标账号 ============
-    let candidate = pick_next_account(
-        &all_accounts,
-        &current_account,
-        prefer_same_provider,
-        &strategy,
-        remaining_threshold,
-    );
+    // ============ Step 6: 选号 + 实时验证候选账号配额 ============
+    //
+    // ⚠️ 关键修复（fork v1.7.11+）：原来 pick_next_account 只读本地 DB 缓存的
+    //   `daily/weekly_quota_remaining_percent` 字段做决策。但这些字段可能陈旧
+    //   （新版 Windsurf API 对配额耗尽账号会省略 int_14 字段，导致历史 100% 值
+    //   永远刷不掉），结果反复切换到「DB 显示 100%、实际已耗尽」的废号。
+    //
+    // 修复：选出 top 候选后，调一次 `query_quota_summary` **实时拉**该账号配额，
+    //   写回 DB（同时让 UI 看到刷新结果），并验证剩余配额仍然达标。不达标就
+    //   把该候选加入 excluded 名单、重新选下一个。重试上限防死循环。
+    const MAX_VERIFY_RETRIES: usize = 5;
+    let mut excluded_ids: HashSet<Uuid> = HashSet::new();
+    let target = loop {
+        if excluded_ids.len() >= MAX_VERIFY_RETRIES {
+            warn!(
+                "[AutoSwitch] 已连续验证 {} 个候选账号都不达标，放弃本轮切换",
+                MAX_VERIFY_RETRIES
+            );
+            break None;
+        }
 
-    let target = match candidate {
+        let candidate = pick_next_account(
+            &all_accounts,
+            &current_account,
+            prefer_same_provider,
+            &strategy,
+            remaining_threshold,
+            &excluded_ids,
+        );
+
+        let mut acc = match candidate {
+            Some(a) => a,
+            None => break None,
+        };
+
+        // 构造该候选的 AuthContext 调 query_quota_summary 拉实时配额
+        let acc_ctx = match AuthContext::from_account(&acc) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                warn!(
+                    "[AutoSwitch] 候选 {} 构造 AuthContext 失败: {}，跳过",
+                    acc.email, e
+                );
+                excluded_ids.insert(acc.id);
+                continue;
+            }
+        };
+
+        match windsurf_service.query_quota_summary(&acc_ctx).await {
+            Ok(summary) => {
+                // 写回最新配额字段到 Account（用 apply_plan_status_to_account
+                // 统一更新规则，包括缺字段视同 0 的语义）
+                crate::commands::api_commands::apply_plan_status_to_account(
+                    &summary.raw_plan_status.get("plan_status").unwrap_or(&summary.raw_plan_status),
+                    &mut acc,
+                );
+                // 持久化到 DB，让 UI 立刻看到刷新后的值
+                if let Err(e) = data_store.update_account(acc.clone()).await {
+                    warn!(
+                        "[AutoSwitch] 候选 {} 配额写回 DB 失败: {}（不影响本次切换决策）",
+                        acc.email, e
+                    );
+                }
+
+                // 验证：实时剩余 > 阈值才接受（remaining_threshold=0 时只要 > 0 即可）
+                let real_remaining = summary.remaining_percent;
+                let pass = if remaining_threshold > 0 {
+                    real_remaining > remaining_threshold
+                } else {
+                    real_remaining > 0
+                };
+
+                if pass {
+                    info!(
+                        "[AutoSwitch] 候选 {} 实时验证通过：剩余 {}% (mode={})",
+                        acc.email, real_remaining, summary.billing_mode
+                    );
+                    break Some(acc);
+                } else {
+                    info!(
+                        "[AutoSwitch] 候选 {} 实时验证失败：剩余 {}% ≤ 阈值 {}%，剔除后重选",
+                        acc.email, real_remaining, remaining_threshold
+                    );
+                    excluded_ids.insert(acc.id);
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "[AutoSwitch] 候选 {} 实时刷新配额失败: {}，剔除后重选",
+                    acc.email, e
+                );
+                excluded_ids.insert(acc.id);
+            }
+        }
+    };
+
+    let target = match target {
         Some(account) => account,
         None => {
             warn!("[AutoSwitch] 没有可用账号可供切换");
-            // 即使没账号可切，也要发个事件让用户知道
+            let reason = if excluded_ids.is_empty() {
+                "当前账号已耗尽，但没有其他可用账号".to_string()
+            } else {
+                format!(
+                    "当前账号已耗尽，验证了 {} 个候选账号实时配额均不达标",
+                    excluded_ids.len()
+                )
+            };
             let result = AutoSwitchResult {
                 triggered: false,
                 current_email: Some(current_email.clone()),
@@ -216,7 +312,7 @@ pub async fn check_and_auto_switch(
                 current_remaining: Some(remaining_percent),
                 switched_to_email: None,
                 switched_to_remaining: None,
-                reason: Some("当前账号已耗尽，但没有其他可用账号".to_string()),
+                reason: Some(reason),
             };
             let _ = app.emit("auto-switch-result", &result);
             return Ok(serde_json::to_value(&result).unwrap_or(json!({"triggered": false})));
@@ -395,12 +491,17 @@ fn pick_next_account(
     prefer_same_provider: bool,
     strategy: &str,
     min_remaining_percent: i32,
+    excluded_ids: &HashSet<Uuid>,
 ) -> Option<Account> {
     let current_is_devin = current.is_devin_account();
 
     let base_filter = |acc: &&Account| -> bool {
         // 排除自己
         if acc.id == current.id {
+            return false;
+        }
+        // 排除"已验证失败"的候选（实时刷新后剩余配额不达标）
+        if excluded_ids.contains(&acc.id) {
             return false;
         }
         // 排除被 Windsurf 禁用的账号
