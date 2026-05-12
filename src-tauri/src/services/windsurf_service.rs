@@ -1153,19 +1153,28 @@ impl WindsurfService {
         let ps = plan_status.get("plan_status").unwrap_or(&plan_status);
 
         // === 新版 QUOTA 模式优先 ===
+        //
+        // ⚠️ 字段缺失语义对齐 `apply_plan_status_to_account`：
+        // Windsurf API 有时会省略 int_14（daily）或 int_15（weekly）字段，
+        // 我们视同 "已耗尽"（0%），与 UI 显示保持一致，避免 auto_switch
+        // 因缺字段误判"还有配额"导致漏切。
         let daily_remaining = ps.get("daily_quota_remaining_percent").and_then(|v| v.as_i64());
         let weekly_remaining = ps
             .get("weekly_quota_remaining_percent")
             .and_then(|v| v.as_i64());
 
-        if daily_remaining.is_some() || weekly_remaining.is_some() {
-            let min_remaining = match (daily_remaining, weekly_remaining) {
-                (Some(d), Some(w)) => d.min(w),
-                (Some(d), None) => d,
-                (None, Some(w)) => w,
-                _ => 100,
-            }
-            .clamp(0, 100) as i32;
+        // 判定"QUOTA 计费模式"：只要账号有 billing_strategy=QUOTA(2)，或者响应里
+        // 出现过日/周配额字段，就走 QUOTA 分支
+        let billing_strategy = ps.get("billing_strategy").and_then(|v| v.as_i64());
+        let is_quota_mode = billing_strategy == Some(2)
+            || daily_remaining.is_some()
+            || weekly_remaining.is_some();
+
+        if is_quota_mode {
+            // 缺字段 → 视同 0（已耗尽）
+            let daily_val = daily_remaining.unwrap_or(0);
+            let weekly_val = weekly_remaining.unwrap_or(0);
+            let min_remaining = daily_val.min(weekly_val).clamp(0, 100) as i32;
             let usage_percent = (100 - min_remaining).clamp(0, 100);
             // 估算字段：100% → 10000，0% → 0；保持 *100 scaling 兼容
             let used_estimate = (usage_percent * 100) as i64;

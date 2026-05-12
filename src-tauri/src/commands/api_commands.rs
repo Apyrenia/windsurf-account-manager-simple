@@ -83,12 +83,22 @@ pub fn apply_plan_status_to_account(plan_status: &serde_json::Value, account: &m
     }
     
     // 更新日/周配额百分比
-    if let Some(v) = plan_status.get("daily_quota_remaining_percent").and_then(|v| v.as_i64()) {
-        account.daily_quota_remaining_percent = Some(v as i32);
-    }
-    if let Some(v) = plan_status.get("weekly_quota_remaining_percent").and_then(|v| v.as_i64()) {
-        account.weekly_quota_remaining_percent = Some(v as i32);
-    }
+    //
+    // ⚠️ 关键修复（fork v1.7.11）：响应**缺字段**时写 0，而不是保留旧值。
+    //
+    // 原因：Windsurf API 在某些场景下（如 Devin Trial 账号日配额耗尽后）会
+    //       **省略** `int_14` 字段，chaogei 原逻辑 "字段存在才更新" 会保留
+    //       数据库里的历史值（常为 100%），导致 UI 永远显示 "日配额 100%" 而
+    //       实际已经用完。
+    //
+    // 修复：字段缺失 → 视同 0%（耗尽）。对 CREDITS 模式账号无影响（UI 只在
+    //       billing_strategy==QUOTA 时才显示日/周配额行，`isQuotaMode` 判断）。
+    account.daily_quota_remaining_percent = Some(
+        plan_status.get("daily_quota_remaining_percent").and_then(|v| v.as_i64()).unwrap_or(0) as i32
+    );
+    account.weekly_quota_remaining_percent = Some(
+        plan_status.get("weekly_quota_remaining_percent").and_then(|v| v.as_i64()).unwrap_or(0) as i32
+    );
     if let Some(v) = plan_status.get("daily_quota_reset_at_unix").and_then(|v| v.as_i64()) {
         account.daily_quota_reset_at_unix = Some(v);
     }

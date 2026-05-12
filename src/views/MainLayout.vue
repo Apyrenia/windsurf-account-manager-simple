@@ -2305,6 +2305,10 @@ onUnmounted(() => {
     autoSwitchUnlisten = null;
   }
 });
+
+// ⚠️ fork v1.7.11：Timer 图标对应的「自动重置」菜单项已隐藏（见模板内注释），
+// 保留 import 方便未来恢复，避免 vue-tsc 报 "declared but never read"
+void Timer;
 </script>
 
 <style scoped>

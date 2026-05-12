@@ -173,54 +173,18 @@
     </div>
 
     <div class="card-actions">
-      <!-- 第一排按钮（6个） -->
+      <!--
+        fork v1.7.11 精简版：只保留 6 个常用按钮，顺序：
+          刷新Token → 账号信息 → 删除 → 编辑 → 重新登录 → 无感切号
+        已移除（历史代码可从 git revert）：
+          批量重置团队积分 / 查询账单 / 自动充值 / 积分记录 / 转换登录方式 /
+          删除用户(Windsurf) / 使用分析 / 团队设置 / 团队管理 / 更换订阅 /
+          获取试用链接 / 检查Pro试用资格
+      -->
       <div class="action-buttons">
-        <el-tooltip content="批量重置团队积分" placement="top">
-          <el-button
-            size="small"
-            :icon="Refresh"
-            circle
-            type="warning"
-            plain
-            @click="handleBatchResetTeamCredits"
-            :loading="isResettingCredits"
-          />
-        </el-tooltip>
-
-        <el-tooltip content="查询账单" placement="top">
-          <el-button 
-            size="small" 
-            :icon="Document"
-            circle
-            @click="handleGetBilling"
-            :loading="isGettingBilling"
-          />
-        </el-tooltip>
-
-        <el-tooltip content="自动充值" placement="top">
-          <el-button
-            size="small"
-            :icon="Money"
-            circle
-            type="warning"
-            plain
-            @click="handleAutoRefill"
-          />
-        </el-tooltip>
-
-        <el-tooltip content="积分记录" placement="top">
-          <el-button 
-            size="small" 
-            :icon="TrendCharts"
-            circle
-            @click="handleShowCreditHistory"
-            :loading="isLoadingCreditHistory"
-          />
-        </el-tooltip>
-
         <el-tooltip :content="refreshButtonTooltip" placement="top">
-          <el-button 
-            size="small" 
+          <el-button
+            size="small"
             :icon="RefreshRight"
             circle
             @click="handleRefreshToken"
@@ -229,36 +193,11 @@
         </el-tooltip>
 
         <el-tooltip content="账号信息" placement="top">
-          <el-button 
-            size="small" 
+          <el-button
+            size="small"
             :icon="User"
             circle
             @click="handleAccountInfo"
-          />
-        </el-tooltip>
-
-        <!-- 转换登录方式（Firebase ↔ Devin）：按当前 auth_provider 动态切换 tooltip 与动作 -->
-        <el-tooltip :content="convertActionLabel" placement="top">
-          <el-button
-            size="small"
-            :icon="Connection"
-            circle
-            type="warning"
-            plain
-            @click="handleConvertAuthProvider"
-            :loading="isConvertingAuth"
-          />
-        </el-tooltip>
-
-        <el-tooltip content="删除用户(Windsurf)" placement="top">
-          <el-button
-            size="small"
-            :icon="UserFilled"
-            circle
-            type="warning"
-            plain
-            :loading="deletingUser"
-            @click="handleDeleteWindsurfUser"
           />
         </el-tooltip>
 
@@ -272,13 +211,10 @@
             @click="handleDelete"
           />
         </el-tooltip>
-      </div>
-      
-      <!-- 第二排按钮（5个） -->
-      <div class="action-buttons">
+
         <el-tooltip content="编辑" placement="top">
-          <el-button 
-            size="small" 
+          <el-button
+            size="small"
             :icon="Edit"
             circle
             @click="handleEdit"
@@ -286,76 +222,15 @@
         </el-tooltip>
 
         <el-tooltip content="重新登录" placement="top">
-          <el-button 
-            size="small" 
+          <el-button
+            size="small"
             :icon="Key"
             circle
             @click="handleLogin"
           />
         </el-tooltip>
 
-        <el-tooltip content="使用分析" placement="top">
-          <el-button
-            size="small"
-            :icon="DataAnalysis"
-            circle
-            @click="handleShowAnalytics"
-          />
-        </el-tooltip>
-
-        <el-tooltip content="团队设置" placement="top">
-          <el-button
-            size="small"
-            :icon="Setting"
-            circle
-            @click="handleTeamSettings"
-          />
-        </el-tooltip>
-
-        <el-tooltip content="团队管理" placement="top">
-          <el-button
-            size="small"
-            :icon="UserFilled"
-            circle
-            type="primary"
-            plain
-            @click="handleTeamManagement"
-          />
-        </el-tooltip>
-
-        <el-tooltip content="更换订阅" placement="top">
-          <el-button
-            size="small"
-            :icon="Sell"
-            circle
-            @click="handleUpdatePlan"
-            :loading="isUpdatingPlan"
-          />
-        </el-tooltip>
-
-        <el-tooltip content="获取试用链接" placement="top">
-          <el-button
-            size="small"
-            :icon="Link"
-            circle
-            @click="handleGetTrialLink"
-            :loading="isGettingTrialLink"
-          />
-        </el-tooltip>
-
-        <el-tooltip content="检查Pro试用资格" placement="top">
-          <el-button
-            size="small"
-            :icon="Trophy"
-            circle
-            type="info"
-            plain
-            @click="handleCheckProTrial"
-            :loading="isCheckingProTrial"
-          />
-        </el-tooltip>
-
-        <el-tooltip content="一键切号" placement="top">
+        <el-tooltip content="无感切号" placement="top">
           <el-button
             size="small"
             :icon="Switch"
@@ -1132,17 +1007,23 @@ async function handleRefreshToken() {
           updatedAccount.billing_strategy = result.user_info.plan.billing_strategy;
         }
         
-        // 合并 plan_status 中的新配额字段（避免覆盖后端已保存的数据）
+        // 合并 plan_status 中的新配额字段
+        //
+        // ⚠️ 关键修复（fork v1.7.11）：日/周配额百分比字段**缺失时强制写 0**
+        //   （与后端 apply_plan_status_to_account 对齐，见 api_commands.rs:85-101）
+        //
+        // 背景：Windsurf API 对某些场景（Devin Trial 配额耗尽等）会省略 int_14/int_15
+        //   字段。旧逻辑 "undefined 跳过" 会保留数据库里的陈旧满额值（常为 100%），
+        //   导致"点刷新按钮没反应 / 日配额用完了还显示 100%"的 bug。
         if (result.plan_status) {
           if (result.plan_status.billing_strategy !== undefined) {
             updatedAccount.billing_strategy = result.plan_status.billing_strategy;
           }
-          if (result.plan_status.daily_quota_remaining_percent !== undefined) {
-            updatedAccount.daily_quota_remaining_percent = result.plan_status.daily_quota_remaining_percent;
-          }
-          if (result.plan_status.weekly_quota_remaining_percent !== undefined) {
-            updatedAccount.weekly_quota_remaining_percent = result.plan_status.weekly_quota_remaining_percent;
-          }
+          // 日/周配额：缺字段视同 0（耗尽语义，对 CREDITS 账号无影响因 UI 用 isQuotaMode 过滤）
+          updatedAccount.daily_quota_remaining_percent =
+            result.plan_status.daily_quota_remaining_percent ?? 0;
+          updatedAccount.weekly_quota_remaining_percent =
+            result.plan_status.weekly_quota_remaining_percent ?? 0;
           if (result.plan_status.daily_quota_reset_at_unix !== undefined) {
             updatedAccount.daily_quota_reset_at_unix = result.plan_status.daily_quota_reset_at_unix;
           }
@@ -2065,6 +1946,38 @@ async function handleSwitchAccount() {
   }
 }
 
+// ⚠️ fork v1.7.11：下列 handler / ref / computed 对应的按钮已从模板中移除（精简版），
+// 但为了未来「恢复某个按钮 = 取消模板注释，无需重建函数」的便捷性，代码保留。
+// 此处用 void 引用让 TypeScript 不报 "declared but never read" 错误。
+// 如需彻底删除某个 handler，同时从下面这行里移除对应引用即可。
+// 函数 / computed / ref
+void handleGetBilling;
+void handleShowCreditHistory;
+void handleConvertAuthProvider;
+void handleShowAnalytics;
+void handleTeamSettings;
+void handleTeamManagement;
+void handleAutoRefill;
+void handleBatchResetTeamCredits;
+void handleUpdatePlan;
+void handleGetTrialLink;
+void handleCheckProTrial;
+void handleDeleteWindsurfUser;
+void isUpdatingPlan;
+void isLoadingCreditHistory;
+void convertActionLabel;
+
+// 仅被已移除按钮使用的 icon import
+void Document;
+void TrendCharts;
+void Link;
+void DataAnalysis;
+void Setting;
+void UserFilled;
+void Money;
+void Sell;
+void Refresh;
+void Connection;
 </script>
 
 <style scoped>

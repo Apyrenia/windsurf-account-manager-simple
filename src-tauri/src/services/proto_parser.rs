@@ -1047,7 +1047,7 @@ impl ProtobufParser {
             "success": true,
             "raw_data": parsed.clone()
         });
-        
+
         // 提取 PlanStatus (field 1)
         if let Some(plan_status) = parsed.get("subMesssage_1") {
             // 提取 PlanInfo (field 1)
@@ -1230,17 +1230,14 @@ impl ProtobufParser {
             
             // field 14: daily_quota_remaining_percent
             //
-            // ⚠️ DEBUG (fork v1.7.11)：chaogei 把 int_14 命名为 "remaining"，但用户报告
-            // "日配额用完了却显示 100%"，怀疑字段语义实际是 "used_percent"。
-            // 临时打印 raw 值，方便对比账号实际状态验证字段语义。
-            // 验证完后可删此 println。
+            // 注意：Windsurf API 有时会省略此字段（如 Devin Trial 耗尽后）。
+            // 缺失时下游 `apply_plan_status_to_account` 会把账号字段强制写 0，
+            // 以避免保留陈旧的满额值误导用户。
             if let Some(v) = plan_status.get("int_14").and_then(|v| v.as_i64()) {
-                println!("[PlanStatus DEBUG] int_14 (daily_quota_*_percent) raw value = {}", v);
                 result["daily_quota_remaining_percent"] = json!(v);
             }
-            // field 15: weekly_quota_remaining_percent
+            // field 15: weekly_quota_remaining_percent（同上缺字段策略）
             if let Some(v) = plan_status.get("int_15").and_then(|v| v.as_i64()) {
-                println!("[PlanStatus DEBUG] int_15 (weekly_quota_*_percent) raw value = {}", v);
                 result["weekly_quota_remaining_percent"] = json!(v);
             }
             // field 16: overage_balance_micros
